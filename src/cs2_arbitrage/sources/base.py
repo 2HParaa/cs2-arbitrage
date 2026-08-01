@@ -12,7 +12,7 @@ class Price:
 
 
 class PriceSource(ABC):
-    """Interface commune a toutes les marketplaces (pattern adapter)."""
+    """Interface commune à toutes les marketplaces (pattern adapter)."""
 
     @property
     @abstractmethod
@@ -21,4 +21,4 @@ class PriceSource(ABC):
 
     @abstractmethod
     def get_price(self, item_name: str) -> Price:
-        """Recupere le prix courant d'un item sur cette marketplace."""
+        """Récupère le prix courant d'un item sur cette marketplace."""
