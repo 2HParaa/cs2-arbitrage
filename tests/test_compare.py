@@ -27,6 +27,7 @@ def test_compare_computes_profit_in_both_directions():
     assert len(opportunities) == 2
     assert Opportunity(
         item_name="AK-47 | Redline",
+        currency="EUR",
         buy_source="cheap_market",
         sell_source="pricey_market",
         buy_price=Decimal("50.00"),
@@ -36,6 +37,7 @@ def test_compare_computes_profit_in_both_directions():
     ) in opportunities
     assert Opportunity(
         item_name="AK-47 | Redline",
+        currency="EUR",
         buy_source="pricey_market",
         sell_source="cheap_market",
         buy_price=Decimal("70.00"),
