@@ -13,6 +13,7 @@ NON_CASH_SOURCES = {"steam"}
 @dataclass(frozen=True)
 class Opportunity:
     item_name: str
+    currency: str
     buy_source: str
     sell_source: str
     buy_price: Decimal
@@ -38,6 +39,7 @@ def compare(prices: list[NormalizedPrice]) -> list[Opportunity]:
             opportunities.append(
                 Opportunity(
                     item_name=buy.item_name,
+                    currency=buy.currency,
                     buy_source=buy.source,
                     sell_source=sell.source,
                     buy_price=buy.gross_amount,
