@@ -21,15 +21,20 @@ def _subtractive_net(gross_amount: Decimal, fee_rate: Decimal) -> Decimal:
     return gross_amount * (1 - fee_rate)
 
 
-# Taux et modèle de frais vendeur standards, vérifiés au 2026-08-01
+# Taux et modèle de frais vendeur standards, vérifiés au 2026-08-02
 # (hors paliers/cas particuliers, phase 1) :
 # - Steam : 15% (5% Valve + 10% frais du jeu), modèle additif. L'argent reçu
 #   va dans le Steam Wallet, non retirable en cash.
 # - Skinport : 8% en vente publique standard (6% dès 1000 EUR/USD, 2% en
 #   vente privée -- non gérés pour l'instant), modèle soustractif.
+# - CS.Money : 5% en mode "Market" pour les ventes < 1000$ (3% au-dessus,
+#   non géré pour l'instant), modèle soustractif. Le mode "Trade" (7% de
+#   commission) n'est pas géré : on ne modélise que le mode Market, celui
+#   dont on récupère le prix dans sources/csmoney.py.
 FEES = {
     "steam": (Decimal("0.15"), _additive_net),
     "skinport": (Decimal("0.08"), _subtractive_net),
+    "csmoney": (Decimal("0.05"), _subtractive_net),
 }
 
 
