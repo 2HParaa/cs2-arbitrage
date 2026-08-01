@@ -10,7 +10,7 @@ CURRENCY_IDS = {"USD": 1, "EUR": 3}
 
 
 class SteamMarketError(Exception):
-    """Erreur lors de la recuperation d'un prix sur Steam Community Market."""
+    """Erreur lors de la récupération d'un prix sur Steam Community Market."""
 
 
 class SteamMarketSource(PriceSource):
@@ -36,19 +36,19 @@ class SteamMarketSource(PriceSource):
         data = response.json()
 
         if not data.get("success"):
-            raise SteamMarketError(f"Steam n'a pas trouve de prix pour '{item_name}'")
+            raise SteamMarketError(f"Steam n'a pas trouvé de prix pour '{item_name}'")
 
         amount = self._parse_amount(data["lowest_price"])
         return Price(item_name=item_name, amount=amount, currency=self._currency, source=self.name)
 
     def _parse_amount(self, raw_price: str) -> Decimal:
-        # Le separateur de milliers (espace en EUR : "1 234,56 €") est filtre
+        # Le séparateur de milliers (espace en EUR : "1 234,56 €") est filtré
         # ici car il n'est ni un chiffre ni "," / ".".
         digits = "".join(char for char in raw_price if char.isdigit() or char in ",.")
         if self._currency == "USD":
-            # format "1,234.56" : virgule = milliers, point = decimales
+            # format "1,234.56" : virgule = milliers, point = décimales
             digits = digits.replace(",", "")
         else:
-            # format EUR "1234,56" : virgule = decimales
+            # format EUR "1234,56" : virgule = décimales
             digits = digits.replace(",", ".")
         return Decimal(digits)
