@@ -31,9 +31,9 @@ class SkinportSource(PriceSource):
         return Price(item_name=item_name, amount=amount, currency=self._currency, source=self.name)
 
     def _get_catalog(self) -> dict:
-        # L'API Skinport ne permet pas de chercher un item precis : elle
-        # renvoie tout le catalogue en un seul appel. On le recupere une
-        # seule fois par instance et on le reutilise pour les appels suivants.
+        # L'API Skinport ne permet pas de chercher un item précis : elle
+        # renvoie tout le catalogue en un seul appel. On le récupère une
+        # seule fois par instance et on le réutilise pour les appels suivants.
         if self._catalog is None:
             response = requests.get(
                 ITEMS_URL,
