@@ -71,7 +71,7 @@ def test_get_price_raises_when_item_not_found(mock_get):
 
     source = SteamMarketSource()
 
-    with pytest.raises(SteamMarketError):
+    with pytest.raises(SteamMarketError, match="n'a pas trouvé de prix"):
         source.get_price("Item inexistant")
 
 
@@ -102,3 +102,37 @@ def test_get_price_raises_after_exhausting_retries_on_429(mock_get, mock_sleep):
         source.get_price("AK-47 | Redline (Field-Tested)")
 
     assert mock_get.call_count == 4
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_raises_when_no_active_listing(mock_get):
+    # Steam répond "success: true" sans "lowest_price" quand il n'y a aucune
+    # offre de vente active (cf. "Glock-18 | Fade (Factory New)" en réel).
+    mock_get.return_value = _mock_get({"success": True})
+
+    source = SteamMarketSource()
+
+    with pytest.raises(SteamMarketError, match="Aucune offre de vente active"):
+        source.get_price("Glock-18 | Fade (Factory New)")
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_warns_on_low_volume(mock_get):
+    mock_get.return_value = _mock_get({"success": True, "lowest_price": "12,34€", "volume": "3"})
+
+    source = SteamMarketSource(currency="EUR")
+
+    with pytest.warns(UserWarning, match="Volume faible"):
+        price = source.get_price("Desert Eagle | Blaze (Factory New)")
+
+    assert price.amount == Decimal("12.34")
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_does_not_warn_on_sufficient_volume(mock_get, recwarn):
+    mock_get.return_value = _mock_get({"success": True, "lowest_price": "12,34€", "volume": "81"})
+
+    source = SteamMarketSource(currency="EUR")
+    source.get_price("AK-47 | Redline (Field-Tested)")
+
+    assert len(recwarn) == 0

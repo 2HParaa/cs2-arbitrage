@@ -1,8 +1,9 @@
+import warnings
 from decimal import Decimal
 
 import requests
 
-from cs2_arbitrage.sources.base import Price, PriceSource
+from cs2_arbitrage.sources.base import MIN_VOLUME_FOR_CONFIDENCE, Price, PriceSource
 
 CS2_APP_ID = 730
 ITEMS_URL = "https://api.skinport.com/v1/items"
@@ -26,6 +27,18 @@ class SkinportSource(PriceSource):
         item = catalog.get(item_name)
         if item is None:
             raise SkinportError(f"Skinport n'a pas trouvé de prix pour '{item_name}'")
+        if item.get("min_price") is None:
+            raise SkinportError(f"Aucune offre de vente active sur Skinport pour '{item_name}'")
+
+        # "quantity" = nombre d'offres actives, contrairement au "volume"
+        # (ventes/24h) de Steam. En dessous du seuil, le prix repose sur trop
+        # peu d'offres pour être fiable.
+        quantity = item.get("quantity")
+        if quantity is not None and int(quantity) < MIN_VOLUME_FOR_CONFIDENCE:
+            warnings.warn(
+                f"Peu d'offres actives sur Skinport pour '{item_name}' ({quantity} offres, "
+                f"seuil de confiance : {MIN_VOLUME_FOR_CONFIDENCE}) — prix potentiellement peu fiable"
+            )
 
         amount = Decimal(str(item["min_price"]))
         return Price(item_name=item_name, amount=amount, currency=self._currency, source=self.name)
