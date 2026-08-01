@@ -13,8 +13,11 @@ CURRENCY_IDS = {"USD": 1, "EUR": 3}
 # Steam limite le nombre de requêtes sur cet endpoint (non documenté
 # officiellement, cf. CLAUDE.md). On espace chaque appel pour éviter de
 # déclencher la limite, et on réessaie avec un délai croissant si ça arrive
-# quand même, plutôt que de faire planter tout le script.
-THROTTLE_SECONDS = 3
+# quand même, plutôt que de faire planter tout le script. Testé prudemment
+# (1 seul palier, peu de requêtes) sans blocage à 1.5s le 2026-08-02 -- pas
+# de recherche agressive de la vraie limite ici, contrairement à CS.Money,
+# car c'est le compte/IP réel de l'utilisateur qui est en jeu.
+THROTTLE_SECONDS = 1.5
 MAX_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 10
 
@@ -45,7 +48,9 @@ class SteamMarketSource(PriceSource):
         # d'offres actives). En dessous du seuil, le prix repose sur trop peu
         # de transactions récentes pour être fiable.
         volume = data.get("volume")
-        if volume is not None and int(volume) < MIN_VOLUME_FOR_CONFIDENCE:
+        # "volume" peut contenir une virgule comme séparateur de milliers
+        # (ex: "2,123"), à retirer avant conversion en entier.
+        if volume is not None and int(str(volume).replace(",", "")) < MIN_VOLUME_FOR_CONFIDENCE:
             warnings.warn(
                 f"Volume faible sur Steam pour '{item_name}' ({volume} ventes/24h, "
                 f"seuil de confiance : {MIN_VOLUME_FOR_CONFIDENCE}) — prix potentiellement peu fiable"
