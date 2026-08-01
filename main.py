@@ -3,6 +3,7 @@ import sys
 from cs2_arbitrage.compare import compare
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.report import generate_report
+from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 
@@ -13,10 +14,10 @@ from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-# Liste de test volontairement variée : rifles/pistolets/couteaux, StatTrak
-# et non-StatTrak, du très bon marché au très cher. Les couteaux ont un
-# préfixe "★ " dans leur market_hash_name officiel (vérifié contre le vrai
-# catalogue Skinport).
+# Liste de test volontairement variée : rifles/pistolets/couteaux/caisse,
+# StatTrak et non-StatTrak, du très bon marché au très cher. Les couteaux ont
+# un préfixe "★ " dans leur market_hash_name officiel (vérifié contre le
+# vrai catalogue Skinport).
 ITEMS = [
     "AK-47 | Nouveau Rouge (Minimal Wear)",
     "★ Nomad Knife | Tiger Tooth (Factory New)",
@@ -28,9 +29,14 @@ ITEMS = [
     "USP-S | Kill Confirmed (Minimal Wear)",
     "★ Karambit | Doppler (Factory New)",
     "P250 | Sand Dune (Battle-Scarred)",
+    "Shadow Case",
 ]
 
-SOURCES = [SteamMarketSource(currency="EUR"), SkinportSource(currency="EUR")]
+SOURCES = [
+    SteamMarketSource(currency="EUR"),
+    SkinportSource(currency="EUR"),
+    CSMoneySource(currency="EUR"),
+]
 
 
 def collect_normalized_prices(items, sources):
@@ -39,7 +45,7 @@ def collect_normalized_prices(items, sources):
         for source in sources:
             try:
                 price = source.get_price(item_name)
-            except (SteamMarketError, SkinportError) as error:
+            except (SteamMarketError, SkinportError, CSMoneyError) as error:
                 print(f"[avertissement] {error}")
                 continue
             normalized_prices.append(normalize(price))
