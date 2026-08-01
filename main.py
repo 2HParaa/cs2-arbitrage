@@ -6,9 +6,12 @@ from cs2_arbitrage.report import generate_report
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 
-# La console Windows encode stdout en cp1252 par défaut, qui ne sait pas
-# afficher certains caractères présents dans les noms d'items (ex: ★).
+# La console Windows encode stdout/stderr en cp1252 par défaut, qui ne sait
+# pas afficher certains caractères présents dans les noms d'items (ex: ★) ni
+# dans les warnings (ex: —). stderr est le flux utilisé par warnings.warn()
+# et, plus tard, par le module logging si on l'ajoute.
 sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 
 # Liste de test volontairement variée : rifles/pistolets/couteaux, StatTrak
 # et non-StatTrak, du très bon marché au très cher. Les couteaux ont un

@@ -61,5 +61,64 @@ def test_get_price_raises_when_item_not_found(mock_get):
 
     source = SkinportSource()
 
-    with pytest.raises(SkinportError):
+    with pytest.raises(SkinportError, match="n'a pas trouvé de prix"):
         source.get_price("Item inexistant")
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_get_price_raises_when_no_active_listing(mock_get):
+    catalog = [
+        {
+            "market_hash_name": "Item sans offre",
+            "currency": "EUR",
+            "min_price": None,
+            "max_price": None,
+            "quantity": 0,
+        }
+    ]
+    mock_get.return_value = _mock_get(catalog)
+
+    source = SkinportSource()
+
+    with pytest.raises(SkinportError, match="Aucune offre de vente active"):
+        source.get_price("Item sans offre")
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_get_price_warns_on_low_quantity(mock_get):
+    catalog = [
+        {
+            "market_hash_name": "AK-47 | Redline (Field-Tested)",
+            "currency": "EUR",
+            "min_price": 12.34,
+            "max_price": 15.0,
+            "quantity": 3,
+        }
+    ]
+    mock_get.return_value = _mock_get(catalog)
+
+    source = SkinportSource(currency="EUR")
+
+    with pytest.warns(UserWarning, match="Peu d'offres actives"):
+        price = source.get_price("AK-47 | Redline (Field-Tested)")
+
+    assert price.amount == Decimal("12.34")
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_get_price_does_not_warn_on_sufficient_quantity(mock_get, recwarn):
+    catalog = [
+        {
+            "market_hash_name": "AK-47 | Redline (Field-Tested)",
+            "currency": "EUR",
+            "min_price": 12.34,
+            "max_price": 15.0,
+            "quantity": 50,
+        }
+    ]
+    mock_get.return_value = _mock_get(catalog)
+
+    source = SkinportSource(currency="EUR")
+    source.get_price("AK-47 | Redline (Field-Tested)")
+
+    assert len(recwarn) == 0
