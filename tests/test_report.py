@@ -36,7 +36,9 @@ def test_report_lists_profitable_opportunities_sorted_by_profit():
 
     lines = report.splitlines()
     best_index = next(i for i, line in enumerate(lines) if "other_market" in line)
-    worst_index = next(i for i, line in enumerate(lines) if "cheap_market" in line and "pricey" in line)
+    worst_index = next(
+        i for i, line in enumerate(lines) if "cheap_market" in line and "pricey" in line
+    )
     assert best_index < worst_index
 
 
