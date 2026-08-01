@@ -1,13 +1,24 @@
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 
 
-def _mock_get(json_data):
+@pytest.fixture(autouse=True)
+def mock_sleep(monkeypatch):
+    # Le throttling proactif (time.sleep(THROTTLE_SECONDS) avant chaque
+    # requête) ralentirait chaque test de plusieurs secondes si on ne le
+    # mockait pas ici, une bonne fois pour tous les tests du fichier.
+    mock = MagicMock()
+    monkeypatch.setattr("cs2_arbitrage.sources.steam.time.sleep", mock)
+    return mock
+
+
+def _mock_get(json_data, status_code=200):
     response = Mock()
+    response.status_code = status_code
     response.raise_for_status = Mock()
     response.json.return_value = json_data
     return response
@@ -62,3 +73,32 @@ def test_get_price_raises_when_item_not_found(mock_get):
 
     with pytest.raises(SteamMarketError):
         source.get_price("Item inexistant")
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_retries_on_429_then_succeeds(mock_get, mock_sleep):
+    mock_get.side_effect = [
+        _mock_get({}, status_code=429),
+        _mock_get({}, status_code=429),
+        _mock_get({"success": True, "lowest_price": "12,34€"}),
+    ]
+
+    source = SteamMarketSource(currency="EUR")
+    price = source.get_price("AK-47 | Redline (Field-Tested)")
+
+    assert price.amount == Decimal("12.34")
+    assert mock_get.call_count == 3
+    # 1 throttle par tentative (3) + 1 delai de retry apres chaque 429 (2)
+    assert mock_sleep.call_count == 5
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_raises_after_exhausting_retries_on_429(mock_get, mock_sleep):
+    mock_get.return_value = _mock_get({}, status_code=429)
+
+    source = SteamMarketSource()
+
+    with pytest.raises(SteamMarketError):
+        source.get_price("AK-47 | Redline (Field-Tested)")
+
+    assert mock_get.call_count == 4
