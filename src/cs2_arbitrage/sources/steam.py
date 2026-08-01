@@ -41,15 +41,14 @@ class SteamMarketSource(PriceSource):
         amount = self._parse_amount(data["lowest_price"])
         return Price(item_name=item_name, amount=amount, currency=self._currency, source=self.name)
 
-    @staticmethod
-    def _parse_amount(raw_price: str) -> Decimal:
+    def _parse_amount(self, raw_price: str) -> Decimal:
         # Le separateur de milliers (espace en EUR : "1 234,56 €") est filtre
         # ici car il n'est ni un chiffre ni "," / ".".
         digits = "".join(char for char in raw_price if char.isdigit() or char in ",.")
-        if "," in digits and "." in digits:
-            # format USD "1,234.56" (virgule = milliers, point = decimales)
+        if self._currency == "USD":
+            # format "1,234.56" : virgule = milliers, point = decimales
             digits = digits.replace(",", "")
-        elif "," in digits:
-            # format EUR "1234,56" (virgule = decimales)
+        else:
+            # format EUR "1234,56" : virgule = decimales
             digits = digits.replace(",", ".")
         return Decimal(digits)
