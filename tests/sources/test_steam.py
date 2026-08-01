@@ -136,3 +136,17 @@ def test_get_price_does_not_warn_on_sufficient_volume(mock_get, recwarn):
     source.get_price("AK-47 | Redline (Field-Tested)")
 
     assert len(recwarn) == 0
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_does_not_warn_on_high_volume_with_thousands_separator(mock_get, recwarn):
+    # "volume" peut contenir une virgule comme séparateur de milliers
+    # (ex: "2,123" pour une caisse très échangée), à ne pas confondre avec
+    # le séparateur décimal de "lowest_price".
+    mock_get.return_value = _mock_get({"success": True, "lowest_price": "0,34€", "volume": "2,123"})
+
+    source = SteamMarketSource(currency="EUR")
+    price = source.get_price("Shadow Case")
+
+    assert price.amount == Decimal("0.34")
+    assert len(recwarn) == 0
