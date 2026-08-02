@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
+from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource, fetch_items
 
 CATALOG = [
     {
@@ -40,6 +40,17 @@ def test_get_price_returns_min_price(mock_get):
     assert price.currency == "EUR"
     assert price.source == "skinport"
 
+    _, kwargs = mock_get.call_args
+    assert kwargs["params"] == {"app_id": 730, "currency": "EUR"}
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_fetch_items_returns_raw_catalog(mock_get):
+    mock_get.return_value = _mock_get(CATALOG)
+
+    items = fetch_items(currency="EUR")
+
+    assert items == CATALOG
     _, kwargs = mock_get.call_args
     assert kwargs["params"] == {"app_id": 730, "currency": "EUR"}
 

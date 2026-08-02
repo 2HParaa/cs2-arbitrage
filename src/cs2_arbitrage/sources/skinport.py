@@ -13,6 +13,19 @@ class SkinportError(Exception):
     """Erreur lors de la récupération d'un prix sur Skinport."""
 
 
+def fetch_items(currency: str = "EUR") -> list[dict]:
+    """Catalogue complet Skinport (~25 000 items en un seul appel, jamais
+    paginé/rate-limité jusqu'ici) — réutilisé par SkinportSource ci-dessous
+    et par catalog.py pour la navigation Type/Arme/Skin."""
+    response = requests.get(
+        ITEMS_URL,
+        params={"app_id": CS2_APP_ID, "currency": currency},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 class SkinportSource(PriceSource):
     def __init__(self, currency: str = "EUR"):
         self._currency = currency
@@ -48,11 +61,6 @@ class SkinportSource(PriceSource):
         # renvoie tout le catalogue en un seul appel. On le récupère une
         # seule fois par instance et on le réutilise pour les appels suivants.
         if self._catalog is None:
-            response = requests.get(
-                ITEMS_URL,
-                params={"app_id": CS2_APP_ID, "currency": self._currency},
-                timeout=10,
-            )
-            response.raise_for_status()
-            self._catalog = {item["market_hash_name"]: item for item in response.json()}
+            items = fetch_items(self._currency)
+            self._catalog = {item["market_hash_name"]: item for item in items}
         return self._catalog
