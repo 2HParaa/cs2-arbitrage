@@ -62,10 +62,24 @@ def test_compare_flags_steam_sale_as_not_cash_realizable():
     opportunities = compare(prices)
 
     sell_on_steam = next(o for o in opportunities if o.sell_source == "steam")
-    sell_on_skinport = next(o for o in opportunities if o.sell_source == "skinport")
 
     assert sell_on_steam.cash_realizable is False
-    assert sell_on_skinport.cash_realizable is True
+
+
+def test_compare_excludes_steam_as_buy_leg():
+    # Un item acheté sur le Steam Market est bloqué au trade 7 jours : ce
+    # n'est pas une jambe d'achat utilisable pour un arbitrage rapide.
+    prices = [
+        _price("AK-47 | Redline", "skinport", "50.00", "45.00"),
+        _price("AK-47 | Redline", "steam", "70.00", "60.00"),
+    ]
+
+    opportunities = compare(prices)
+
+    assert not any(o.buy_source == "steam" for o in opportunities)
+    assert len(opportunities) == 1
+    assert opportunities[0].buy_source == "skinport"
+    assert opportunities[0].sell_source == "steam"
 
 
 def test_compare_only_pairs_prices_of_the_same_item():
@@ -78,7 +92,9 @@ def test_compare_only_pairs_prices_of_the_same_item():
 
     opportunities = compare(prices)
 
-    assert len(opportunities) == 4
+    # Steam exclu comme jambe d'achat (cf. test_compare_excludes_steam_as_buy_leg) :
+    # 1 seule direction valide par item plutôt que 2.
+    assert len(opportunities) == 2
     assert all(o.item_name in {"AK-47 | Redline", "AWP | Asiimov"} for o in opportunities)
     assert not any(
         o.item_name == "AK-47 | Redline" and "AWP" in o.buy_source for o in opportunities
