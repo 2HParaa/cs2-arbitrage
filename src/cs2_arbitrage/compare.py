@@ -9,6 +9,13 @@ from cs2_arbitrage.normalize import NormalizedPrice
 # (Steam Wallet : utilisable uniquement pour racheter sur Steam).
 NON_CASH_SOURCES = {"steam"}
 
+# Un item acheté sur le Steam Community Market est bloqué au trade pendant
+# 7 jours (règle Valve spécifique aux achats Market, contrairement à un
+# achat via trade sur Skinport/CS.Money qui livre un item déjà tradable) :
+# inutilisable comme jambe d'achat pour un arbitrage rapide entre
+# plateformes, donc exclu plutôt que simplement signalé.
+TRADE_LOCKED_BUY_SOURCES = {"steam"}
+
 
 @dataclass(frozen=True)
 class Opportunity:
@@ -31,6 +38,8 @@ def compare(prices: list[NormalizedPrice]) -> list[Opportunity]:
     for item_prices in by_item.values():
         for buy, sell in permutations(item_prices, 2):
             if buy.source == sell.source:
+                continue
+            if buy.source in TRADE_LOCKED_BUY_SOURCES:
                 continue
             if buy.currency != sell.currency:
                 raise ValueError(
