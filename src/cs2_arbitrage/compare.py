@@ -11,9 +11,9 @@ NON_CASH_SOURCES = {"steam"}
 
 # Un item acheté sur le Steam Community Market est bloqué au trade pendant
 # 7 jours (règle Valve spécifique aux achats Market, contrairement à un
-# achat via trade sur Skinport/CS.Money/Waxpeer qui livre un item déjà
-# tradable) : inutilisable comme jambe d'achat pour un arbitrage rapide
-# entre plateformes, donc exclu plutôt que simplement signalé.
+# achat via trade sur Skinport/CS.Money/Waxpeer/CS.Deals qui livre un item
+# déjà tradable) : inutilisable comme jambe d'achat pour un arbitrage
+# rapide entre plateformes, donc exclu plutôt que simplement signalé.
 TRADE_LOCKED_BUY_SOURCES = {"steam"}
 
 
