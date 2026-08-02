@@ -4,6 +4,7 @@ from cs2_arbitrage.compare import compare
 from cs2_arbitrage.gui import run_item_browser
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.report import generate_report
+from cs2_arbitrage.sources.csdeals import CSDealsError, CSDealsSource
 from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
@@ -25,6 +26,7 @@ SOURCES = [
     SkinportSource(currency="USD"),
     CSMoneySource(currency="USD"),
     WaxpeerSource(),
+    CSDealsSource(),
 ]
 
 
@@ -34,7 +36,13 @@ def collect_normalized_prices(items, sources):
         for source in sources:
             try:
                 price = source.get_price(item_name)
-            except (SteamMarketError, SkinportError, CSMoneyError, WaxpeerError) as error:
+            except (
+                SteamMarketError,
+                SkinportError,
+                CSMoneyError,
+                WaxpeerError,
+                CSDealsError,
+            ) as error:
                 print(f"[avertissement] {error}")
                 continue
             normalized_prices.append(normalize(price))
