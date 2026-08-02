@@ -7,6 +7,7 @@ from cs2_arbitrage.report import generate_report
 from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
+from cs2_arbitrage.sources.waxpeer import WaxpeerError, WaxpeerSource
 
 # La console Windows encode stdout/stderr en cp1252 par défaut, qui ne sait
 # pas afficher certains caractères présents dans les noms d'items (ex: ★) ni
@@ -15,10 +16,15 @@ from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
+# USD plutôt qu'EUR : Waxpeer (et bientôt d'autres sources) ne renvoie ses
+# prix qu'en USD (paramètre currency sans effet, vérifié en réel), et
+# compare.py refuse de comparer deux prix en devises différentes. La
+# conversion multi-devises est une feature à part, pas encore construite.
 SOURCES = [
-    SteamMarketSource(currency="EUR"),
-    SkinportSource(currency="EUR"),
-    CSMoneySource(currency="EUR"),
+    SteamMarketSource(currency="USD"),
+    SkinportSource(currency="USD"),
+    CSMoneySource(currency="USD"),
+    WaxpeerSource(),
 ]
 
 
@@ -28,7 +34,7 @@ def collect_normalized_prices(items, sources):
         for source in sources:
             try:
                 price = source.get_price(item_name)
-            except (SteamMarketError, SkinportError, CSMoneyError) as error:
+            except (SteamMarketError, SkinportError, CSMoneyError, WaxpeerError) as error:
                 print(f"[avertissement] {error}")
                 continue
             normalized_prices.append(normalize(price))
