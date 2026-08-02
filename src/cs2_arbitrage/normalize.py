@@ -31,10 +31,12 @@ def _subtractive_net(gross_amount: Decimal, fee_rate: Decimal) -> Decimal:
 #   non géré pour l'instant), modèle soustractif. Le mode "Trade" (7% de
 #   commission) n'est pas géré : on ne modélise que le mode Market, celui
 #   dont on récupère le prix dans sources/csmoney.py.
+# - Waxpeer : 5% vendeur / 0% acheteur, modèle soustractif.
 FEES = {
     "steam": (Decimal("0.15"), _additive_net),
     "skinport": (Decimal("0.08"), _subtractive_net),
     "csmoney": (Decimal("0.05"), _subtractive_net),
+    "waxpeer": (Decimal("0.05"), _subtractive_net),
 }
 
 
