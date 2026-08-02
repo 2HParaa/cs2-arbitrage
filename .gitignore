@@ -6,3 +6,4 @@ venv/
 CLAUDE.md
 *.egg-info/
 .claude/
+.cache/
