@@ -9,11 +9,18 @@ CS2_GAME = "csgo"
 PRICES_URL = "https://api.waxpeer.com/v1/prices"
 
 # Endpoint public, aucune clé requise (vérifié en réel le 2026-08-02) : un
-# seul appel renvoie tout le catalogue CS2 actuellement en vente (prix en
-# centimes de USD, champ "min"), jamais rate-limité jusqu'ici. Le paramètre
-# "currency" n'a aucun effet observé (montants identiques avec ou sans) :
-# l'API est donc traitée comme USD-only ici plutôt que de risquer
-# d'étiqueter silencieusement un montant USD comme EUR.
+# seul appel renvoie tout le catalogue CS2 actuellement en vente (champ
+# "min"), jamais rate-limité jusqu'ici. Le paramètre "currency" n'a aucun
+# effet observé (montants identiques avec ou sans) : l'API est donc traitée
+# comme USD-only ici plutôt que de risquer d'étiqueter silencieusement un
+# montant USD comme EUR.
+#
+# Unité de "min" vérifiée le 2026-08-03 par comparaison avec le vrai prix
+# Steam (endpoint priceoverview) : PAS des centimes de USD (/100), mais des
+# millièmes de USD (/1000). Ex. StatTrak™ AK-47 | Redline (Minimal Wear) :
+# min=333490 -> 333,49 $ (≈72% du prix Steam de 460,70 $, cohérent pour une
+# marketplace tierce) alors qu'en /100 ça donnerait 3 334,90 $, soit 7x le
+# prix Steam — economiquement absurde pour un marché concurrent.
 #
 # Chaque item porte aussi une URL d'image directe ("img", .webp) : réutilisé
 # par catalog.py pour les icônes, qui n'a donc plus besoin de résoudre
@@ -63,7 +70,7 @@ class WaxpeerSource(PriceSource):
                 f"seuil de confiance : {MIN_VOLUME_FOR_CONFIDENCE}) — prix potentiellement peu fiable"
             )
 
-        amount = Decimal(item["min"]) / 100
+        amount = Decimal(item["min"]) / 1000
         return Price(item_name=item_name, amount=amount, currency=self._currency, source=self.name)
 
     def _get_catalog(self) -> dict:

@@ -22,14 +22,14 @@ def _mock_get(json_data):
 
 
 @patch("cs2_arbitrage.sources.waxpeer.requests.get")
-def test_get_price_returns_min_price_converted_from_cents(mock_get):
+def test_get_price_returns_min_price_converted_from_thousandths(mock_get):
     mock_get.return_value = _mock_get(CATALOG)
 
     source = WaxpeerSource()
     price = source.get_price("AK-47 | Redline (Field-Tested)")
 
     assert price.item_name == "AK-47 | Redline (Field-Tested)"
-    assert price.amount == Decimal("144.50")
+    assert price.amount == Decimal("14.45")
     assert price.currency == "USD"
     assert price.source == "waxpeer"
 
@@ -80,7 +80,7 @@ def test_get_price_warns_on_low_count(mock_get):
     with pytest.warns(UserWarning, match="Peu d'offres actives"):
         price = source.get_price("Item rare")
 
-    assert price.amount == Decimal("1000.00")
+    assert price.amount == Decimal("100.00")
 
 
 @patch("cs2_arbitrage.sources.waxpeer.requests.get")
