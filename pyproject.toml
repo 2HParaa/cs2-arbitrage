@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "cs2-arbitrage"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["requests", "brotli"]
+dependencies = ["requests", "brotli", "Pillow", "customtkinter"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

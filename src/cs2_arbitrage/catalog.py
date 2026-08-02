@@ -1,14 +1,19 @@
 import hashlib
+import io
 import re
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from PIL import Image
 
 from cs2_arbitrage.sources.skinport import fetch_items
 from cs2_arbitrage.sources.steam import CS2_APP_ID
+from cs2_arbitrage.sources.waxpeer import WaxpeerError
+from cs2_arbitrage.sources.waxpeer import fetch_items as fetch_waxpeer_items
 
 # La navigation Type/Arme/Skin/Variante est sourcée depuis Skinport (déjà
 # une source du projet) : elle renvoie tout son catalogue en UN SEUL appel
@@ -16,12 +21,16 @@ from cs2_arbitrage.sources.steam import CS2_APP_ID
 # Vérifié en réel le 2026-08-02 : le champ "market_page" de chaque item
 # encode déjà Type + Arme dans son URL, ex:
 # "https://skinport.com/market/rifle/ak-47?item=Aphrodite".
-# Skinport n'a en revanche aucune image : Steam reste utilisé, mais
-# uniquement pour résoudre puis télécharger l'icône d'un skin, à la
-# demande (pas de sweep massif), avec un cache disque (cf. fetch_icon).
+# Skinport n'a en revanche aucune image. Les icônes sont désormais
+# sourcées en priorité depuis le dump Waxpeer (sources/waxpeer.py) : chaque
+# item y porte une URL d'image directe, dans le même appel unique que les
+# prix, sans throttle. Steam ne sert plus que de repli pour les items
+# absents du catalogue Waxpeer (moins couvert : seulement les items
+# actuellement en vente là-bas), à la demande et avec un cache disque
+# (cf. fetch_icon) — c'est ce chemin de repli qui reste throttlé.
 ICON_SEARCH_URL = "https://steamcommunity.com/market/search/render/"
 ICON_BASE_URL = "https://community.akamai.steamstatic.com/economy/image"
-ICON_SIZE = 64
+ICON_SIZE = 128
 ICON_CACHE_DIR = Path(".cache/icons")
 
 THROTTLE_SECONDS = 1.5
@@ -78,17 +87,48 @@ def fetch_icon_bytes(icon_url: str, size: int = ICON_SIZE) -> bytes:
 def fetch_icon(hash_name: str, size: int = ICON_SIZE, cache_dir: Path = ICON_CACHE_DIR) -> bytes:
     """Renvoie l'image (PNG) d'un skin, identifié par son market_hash_name.
     Mise en cache sur disque : une fois résolue, une image n'est plus
-    jamais redemandée à Steam (ni dans cette session, ni dans une future)."""
+    jamais redemandée (ni dans cette session, ni dans une future)."""
     cache_path = cache_dir / f"{hashlib.sha1(hash_name.encode()).hexdigest()}.png"
     if cache_path.exists():
         return cache_path.read_bytes()
 
-    icon_url = _resolve_icon_url(hash_name)
-    image_bytes = fetch_icon_bytes(icon_url, size)
+    image_bytes = _fetch_icon_from_waxpeer(hash_name, size)
+    if image_bytes is None:
+        icon_url = _resolve_icon_url(hash_name)
+        image_bytes = fetch_icon_bytes(icon_url, size)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(image_bytes)
     return image_bytes
+
+
+@lru_cache(maxsize=1)
+def _waxpeer_image_index() -> dict:
+    """market_hash_name -> URL d'image, à partir du dump Waxpeer (un seul
+    appel, mis en cache pour la durée du process : pas question de
+    retélécharger ~5 Mo de catalogue à chaque icône résolue)."""
+    try:
+        items = fetch_waxpeer_items()
+    except (requests.RequestException, WaxpeerError):
+        return {}
+    return {item["name"]: item["img"] for item in items if item.get("img")}
+
+
+def _fetch_icon_from_waxpeer(hash_name: str, size: int) -> bytes | None:
+    image_url = _waxpeer_image_index().get(hash_name)
+    if image_url is None:
+        return None
+    try:
+        response = requests.get(image_url, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    image = Image.open(io.BytesIO(response.content)).convert("RGBA")
+    image = image.resize((size, size), Image.LANCZOS)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _resolve_icon_url(hash_name: str) -> str:

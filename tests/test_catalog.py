@@ -1,4 +1,5 @@
 import hashlib
+import io
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -45,6 +46,20 @@ def mock_sleep(monkeypatch):
     mock = MagicMock()
     monkeypatch.setattr("cs2_arbitrage.catalog.time.sleep", mock)
     return mock
+
+
+@pytest.fixture(autouse=True)
+def no_waxpeer_images_by_default(monkeypatch):
+    # fetch_icon essaie Waxpeer avant Steam : par défaut dans les tests, on
+    # simule un catalogue Waxpeer vide pour forcer le repli Steam (chemin
+    # historiquement testé ci-dessous) sans dépendre du réseau. Les tests
+    # du chemin Waxpeer remplacent explicitement ce mock.
+    from cs2_arbitrage import catalog
+
+    catalog._waxpeer_image_index.cache_clear()
+    monkeypatch.setattr(catalog, "fetch_waxpeer_items", list)
+    yield
+    catalog._waxpeer_image_index.cache_clear()
 
 
 def _mock_response(json_data=None, content=b"", status_code=200):
@@ -238,3 +253,101 @@ def test_fetch_icon_raises_after_exhausting_retries_on_429(mock_get, tmp_path):
         fetch_icon("AK-47 | Redline (Field-Tested)", cache_dir=tmp_path / "icons")
 
     assert mock_get.call_count == 4
+
+
+# -- fetch_icon (résolution Waxpeer, sans throttle) -------------------------
+
+
+def _png_bytes(size=8, color=(255, 0, 0, 255)):
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (size, size), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@patch("cs2_arbitrage.catalog.requests.get")
+def test_fetch_icon_prefers_waxpeer_over_steam(mock_get, tmp_path, monkeypatch):
+    from cs2_arbitrage import catalog
+
+    hash_name = "AK-47 | Redline (Field-Tested)"
+    monkeypatch.setattr(
+        catalog,
+        "fetch_waxpeer_items",
+        lambda: [{"name": hash_name, "img": "https://images.waxpeer.com/a.webp"}],
+    )
+    catalog._waxpeer_image_index.cache_clear()
+    mock_get.return_value = _mock_response(content=_png_bytes())
+
+    result = fetch_icon(hash_name, size=32, cache_dir=tmp_path / "icons")
+
+    assert result != b""
+    # Un seul appel réseau (l'image), pas de résolution Steam (search + image).
+    assert mock_get.call_count == 1
+    assert mock_get.call_args[0][0] == "https://images.waxpeer.com/a.webp"
+
+
+@patch("cs2_arbitrage.catalog.requests.get")
+def test_fetch_icon_falls_back_to_steam_when_item_absent_from_waxpeer(
+    mock_get, tmp_path, monkeypatch
+):
+    from cs2_arbitrage import catalog
+
+    hash_name = "AK-47 | Redline (Field-Tested)"
+    monkeypatch.setattr(catalog, "fetch_waxpeer_items", list)
+    catalog._waxpeer_image_index.cache_clear()
+    mock_get.side_effect = [
+        _mock_response(_search_response([(hash_name, "icon123")])),
+        _mock_response(content=b"steam-bytes"),
+    ]
+
+    result = fetch_icon(hash_name, cache_dir=tmp_path / "icons")
+
+    assert result == b"steam-bytes"
+
+
+@patch("cs2_arbitrage.catalog.requests.get")
+def test_fetch_icon_falls_back_to_steam_when_waxpeer_index_unavailable(
+    mock_get, tmp_path, monkeypatch
+):
+    from cs2_arbitrage import catalog
+    from cs2_arbitrage.sources.waxpeer import WaxpeerError
+
+    hash_name = "AK-47 | Redline (Field-Tested)"
+
+    def _raise():
+        raise WaxpeerError("boom")
+
+    monkeypatch.setattr(catalog, "fetch_waxpeer_items", _raise)
+    catalog._waxpeer_image_index.cache_clear()
+    mock_get.side_effect = [
+        _mock_response(_search_response([(hash_name, "icon123")])),
+        _mock_response(content=b"steam-bytes"),
+    ]
+
+    result = fetch_icon(hash_name, cache_dir=tmp_path / "icons")
+
+    assert result == b"steam-bytes"
+
+
+@patch("cs2_arbitrage.catalog.requests.get")
+def test_waxpeer_image_index_is_built_only_once_across_calls(mock_get, tmp_path, monkeypatch):
+    from cs2_arbitrage import catalog
+
+    call_count = {"n": 0}
+
+    def _fetch():
+        call_count["n"] += 1
+        return [
+            {"name": "AK-47 | Redline (Field-Tested)", "img": "https://images.waxpeer.com/a.webp"},
+            {"name": "AWP | Asiimov (Field-Tested)", "img": "https://images.waxpeer.com/b.webp"},
+        ]
+
+    monkeypatch.setattr(catalog, "fetch_waxpeer_items", _fetch)
+    catalog._waxpeer_image_index.cache_clear()
+    mock_get.return_value = _mock_response(content=_png_bytes())
+
+    fetch_icon("AK-47 | Redline (Field-Tested)", cache_dir=tmp_path / "icons")
+    fetch_icon("AWP | Asiimov (Field-Tested)", cache_dir=tmp_path / "icons")
+
+    assert call_count["n"] == 1
