@@ -49,6 +49,19 @@ def mock_sleep(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def clear_skinport_fetch_items_cache():
+    # fetch_items (sources/skinport.py) est mis en cache par devise pour
+    # partager un seul appel réseau entre catalog.py/SkinportSource/
+    # scanner.py : sans ce nettoyage, un test récupérerait le catalogue
+    # mocké d'un test précédent au lieu du sien.
+    from cs2_arbitrage.catalog import fetch_items
+
+    fetch_items.cache_clear()
+    yield
+    fetch_items.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def no_waxpeer_images_by_default(monkeypatch):
     # fetch_icon essaie Waxpeer avant Steam : par défaut dans les tests, on
     # simule un catalogue Waxpeer vide pour forcer le repli Steam (chemin
