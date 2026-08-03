@@ -2,14 +2,18 @@ import io
 import queue
 import threading
 import tkinter as tk
+from collections import defaultdict
 
 import customtkinter as ctk
 from PIL import Image
 
 from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
+from cs2_arbitrage.compare import Opportunity
 
-ICON_DISPLAY_SIZE = 64
-ICON_HEADER_SIZE = 128
+STEAM_WALLET_WARNING = "Steam Wallet uniquement, non retirable en cash"
+
+ICON_DISPLAY_SIZE = 96
+ICON_HEADER_SIZE = 192
 ICON_POLL_INTERVAL_MS = 50
 
 # Charte graphique "Obsidian Gold" : fond ardoise très sombre, accent ambre
@@ -29,6 +33,7 @@ PALETTE = {
     "accent_hover": "#d9922a",
     "accent_text": "#1a1207",
     "danger": "#f2545b",
+    "profit": "#4ade80",
 }
 
 ctk.set_appearance_mode("dark")
@@ -402,3 +407,136 @@ def run_item_browser() -> tuple[list[str], list[str]]:
     app = ItemBrowserApp(root, ItemCatalog())
     root.mainloop()
     return app.result_items, app.result_platforms
+
+
+class ReportApp:
+    """Fenêtre de résultats : une carte par item, triée par meilleure
+    opportunité décroissante (le but étant de repérer vite le plus
+    rentable), les items sans opportunité rentable relégués en bas."""
+
+    def __init__(self, root: ctk.CTk, opportunities: list[Opportunity]):
+        self.root = root
+        self.root.title("CS2 Arbitrage — Résultats")
+        self.root.geometry("720x700")
+        self.root.minsize(600, 560)
+        self.root.configure(fg_color=PALETTE["bg"])
+
+        by_item = defaultdict(list)
+        for opportunity in opportunities:
+            by_item[opportunity.item_name].append(opportunity)
+
+        profitable_count = sum(1 for o in opportunities if o.profit > 0)
+        header = ctk.CTkLabel(
+            self.root,
+            text=(
+                f"{len(by_item)} item(s) comparé(s) — {profitable_count} opportunité(s) rentable(s)"
+                if by_item
+                else "Aucune donnée de prix exploitable pour cette sélection."
+            ),
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=PALETTE["text"],
+        )
+        header.pack(fill="x", padx=12, pady=(12, 4))
+
+        body = ctk.CTkScrollableFrame(self.root, fg_color=PALETTE["bg"])
+        body.pack(fill="both", expand=True, padx=12, pady=4)
+
+        for item_name, item_opportunities in self._sorted_by_best_profit(by_item):
+            self._render_item_card(body, item_name, item_opportunities)
+
+        ctk.CTkButton(
+            self.root,
+            text="Fermer",
+            height=40,
+            corner_radius=10,
+            fg_color=PALETTE["accent"],
+            hover_color=PALETTE["accent_hover"],
+            text_color=PALETTE["accent_text"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.root.destroy,
+        ).pack(fill="x", padx=12, pady=12)
+
+    def _sorted_by_best_profit(self, by_item: dict) -> list[tuple[str, list[Opportunity]]]:
+        def best_profit(pair):
+            _, item_opportunities = pair
+            return max((o.profit for o in item_opportunities), default=0)
+
+        return sorted(by_item.items(), key=best_profit, reverse=True)
+
+    def _render_item_card(
+        self, parent: ctk.CTkFrame, item_name: str, item_opportunities: list[Opportunity]
+    ) -> None:
+        card = ctk.CTkFrame(parent, fg_color=PALETTE["surface"], corner_radius=10)
+        card.pack(fill="x", pady=6)
+
+        ctk.CTkLabel(
+            card,
+            text=item_name,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=PALETTE["text"],
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(10, 4))
+
+        profitable = sorted(
+            (o for o in item_opportunities if o.profit > 0),
+            key=lambda o: o.profit,
+            reverse=True,
+        )
+        if not profitable:
+            ctk.CTkLabel(
+                card,
+                text="Aucune opportunité rentable.",
+                text_color=PALETTE["text_muted"],
+                anchor="w",
+            ).pack(fill="x", padx=12, pady=(0, 10))
+            return
+
+        for opportunity in profitable:
+            self._render_opportunity_row(card, opportunity)
+        ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
+
+    def _render_opportunity_row(self, parent: ctk.CTkFrame, opportunity: Opportunity) -> None:
+        row = ctk.CTkFrame(parent, fg_color=PALETTE["surface_alt"], corner_radius=8)
+        row.pack(fill="x", padx=12, pady=3)
+
+        text_frame = ctk.CTkFrame(row, fg_color="transparent")
+        text_frame.pack(side="left", fill="x", expand=True, padx=10, pady=8)
+        ctk.CTkLabel(
+            text_frame,
+            text=(
+                f"Acheter sur {opportunity.buy_source} "
+                f"({opportunity.buy_price} {opportunity.currency})"
+            ),
+            text_color=PALETTE["text"],
+            anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            text_frame,
+            text=(
+                f"→ Vendre sur {opportunity.sell_source} "
+                f"(net {opportunity.sell_net_price} {opportunity.currency})"
+            ),
+            text_color=PALETTE["text_muted"],
+            anchor="w",
+        ).pack(fill="x")
+        if not opportunity.cash_realizable:
+            ctk.CTkLabel(
+                text_frame,
+                text=STEAM_WALLET_WARNING,
+                text_color=PALETTE["danger"],
+                font=ctk.CTkFont(size=11),
+                anchor="w",
+            ).pack(fill="x")
+
+        ctk.CTkLabel(
+            row,
+            text=f"+{opportunity.profit} {opportunity.currency}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=PALETTE["profit"],
+        ).pack(side="right", padx=12)
+
+
+def show_report(opportunities: list[Opportunity]) -> None:
+    root = ctk.CTk()
+    ReportApp(root, opportunities)
+    root.mainloop()

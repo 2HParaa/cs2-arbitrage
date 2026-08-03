@@ -1,7 +1,7 @@
 import sys
 
 from cs2_arbitrage.compare import compare
-from cs2_arbitrage.gui import run_item_browser
+from cs2_arbitrage.gui import run_item_browser, show_report
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.report import generate_report
 from cs2_arbitrage.sources.csdeals import CSDealsError, CSDealsSource
@@ -58,7 +58,8 @@ def main():
     sources = [source for source in SOURCES if source.name in selected_platforms]
     normalized_prices = collect_normalized_prices(items, sources)
     opportunities = compare(normalized_prices)
-    print(generate_report(opportunities))
+    print(generate_report(opportunities))  # trace texte en console, en plus de la fenêtre
+    show_report(opportunities)
 
 
 if __name__ == "__main__":
