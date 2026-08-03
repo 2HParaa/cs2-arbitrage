@@ -2,7 +2,6 @@ import io
 import queue
 import threading
 import tkinter as tk
-from collections import defaultdict
 from decimal import ROUND_HALF_UP, Decimal
 
 import customtkinter as ctk
@@ -20,7 +19,12 @@ ICON_DISPLAY_SIZE = 96
 ICON_HEADER_SIZE = 192
 REPORT_ICON_SIZE = 64
 ICON_POLL_INTERVAL_MS = 50
-MAX_DISPLAYED_ITEMS = 150
+# Nombre max de trades affichés dans le rapport (un par item, cf.
+# ReportApp._best_trade_per_item) : un scan de catalogue entier peut
+# trouver bien plus d'opportunités que ça, au prix d'une fenêtre très
+# lente à s'ouvrir (constaté en réel) pour un intérêt limité au-delà des
+# toutes meilleures affaires.
+TOP_TRADES_COUNT = 10
 
 # Scan "tout le catalogue entre $X et $Y" : limité à Skinport/Waxpeer/
 # CS.Deals (cf. scanner.py), Skinport servant de référence pour les deux
@@ -657,13 +661,15 @@ def run_item_browser() -> tuple[list[str], list[str], Decimal | None, Decimal | 
 
 
 class ReportApp:
-    """Fenêtre de résultats : une carte par item, triée par meilleure
-    opportunité relative (%) décroissante — plus parlant que le montant
-    absolu pour repérer les affaires intéressantes sur des items de prix
-    très différents (cf. compare.profit_percent) — les items sans
-    opportunité rentable relégués en bas. Affichage plafonné à
-    MAX_DISPLAYED_ITEMS items (utile pour le scan de catalogue entier, qui
-    peut trouver bien plus d'opportunités qu'une sélection manuelle)."""
+    """Fenêtre de résultats : une carte par trade, un seul (le meilleur)
+    par item, triées par profit relatif (%) décroissant — plus parlant que
+    le montant absolu pour repérer les affaires intéressantes sur des
+    items de prix très différents (cf. compare.profit_percent). Limité aux
+    TOP_TRADES_COUNT meilleurs trades : un scan de catalogue entier peut
+    trouver bien plus d'opportunités que ça n'a de sens d'afficher d'un
+    coup (lenteur d'ouverture constatée en réel avec des centaines de
+    lignes), et l'utilisateur ne s'intéresse de toute façon qu'aux
+    meilleures affaires, pas à la liste exhaustive."""
 
     def __init__(self, root: ctk.CTk, opportunities: list[Opportunity]):
         self.root = root
@@ -675,22 +681,16 @@ class ReportApp:
         self.root.minsize(600, 560)
         self.root.configure(fg_color=PALETTE["bg"])
 
-        by_item = defaultdict(list)
-        for opportunity in opportunities:
-            by_item[opportunity.item_name].append(opportunity)
+        compared_items_count = len({o.item_name for o in opportunities})
+        best_trades = self._best_trade_per_item(opportunities)
+        top_trades = best_trades[:TOP_TRADES_COUNT]
 
-        sorted_items = self._sorted_by_best_profit_percent(by_item)
-        displayed_items = sorted_items[:MAX_DISPLAYED_ITEMS]
-        hidden_count = len(sorted_items) - len(displayed_items)
-
-        profitable_count = sum(1 for o in opportunities if o.profit > 0)
         header_text = (
-            f"{len(by_item)} item(s) comparé(s) — {profitable_count} opportunité(s) rentable(s)"
-            if by_item
-            else "Aucune donnée de prix exploitable pour cette sélection."
+            f"{compared_items_count} item(s) comparé(s) — top {len(top_trades)} "
+            f"trade(s) le(s) plus rentable(s)"
+            if top_trades
+            else "Aucune opportunité rentable pour cette sélection."
         )
-        if hidden_count > 0:
-            header_text += f" — {len(displayed_items)} affiché(s), triés par rentabilité"
         header = ctk.CTkLabel(
             self.root,
             text=header_text,
@@ -704,9 +704,9 @@ class ReportApp:
         body.pack(fill="both", expand=True, padx=12, pady=4)
 
         icon_labels = []
-        for item_name, item_opportunities in displayed_items:
-            icon_label = self._render_item_card(body, item_name, item_opportunities)
-            icon_labels.append((item_name, icon_label))
+        for opportunity in top_trades:
+            icon_label = self._render_item_card(body, opportunity)
+            icon_labels.append((opportunity.item_name, icon_label))
         self._load_icons_async(icon_labels)
 
         ctk.CTkButton(
@@ -721,16 +721,22 @@ class ReportApp:
             command=self.root.destroy,
         ).pack(fill="x", padx=12, pady=12)
 
-    def _sorted_by_best_profit_percent(self, by_item: dict) -> list[tuple[str, list[Opportunity]]]:
-        def best_profit_percent(pair):
-            _, item_opportunities = pair
-            return max((profit_percent(o) for o in item_opportunities), default=0)
+    def _best_trade_per_item(self, opportunities: list[Opportunity]) -> list[Opportunity]:
+        """Le meilleur trade rentable (profit relatif décroissant) pour
+        chaque item, un seul par item — les items sans trade rentable ne
+        sont pas représentés du tout, contrairement à l'ancien
+        comportement qui les affichait quand même avec "Aucune opportunité
+        rentable"."""
+        best_by_item: dict[str, Opportunity] = {}
+        for opportunity in opportunities:
+            if opportunity.profit <= 0:
+                continue
+            current_best = best_by_item.get(opportunity.item_name)
+            if current_best is None or profit_percent(opportunity) > profit_percent(current_best):
+                best_by_item[opportunity.item_name] = opportunity
+        return sorted(best_by_item.values(), key=profit_percent, reverse=True)
 
-        return sorted(by_item.items(), key=best_profit_percent, reverse=True)
-
-    def _render_item_card(
-        self, parent: ctk.CTkFrame, item_name: str, item_opportunities: list[Opportunity]
-    ) -> ctk.CTkLabel:
+    def _render_item_card(self, parent: ctk.CTkFrame, opportunity: Opportunity) -> ctk.CTkLabel:
         card = ctk.CTkFrame(parent, fg_color=PALETTE["surface"], corner_radius=10)
         card.pack(fill="x", pady=6)
 
@@ -742,28 +748,13 @@ class ReportApp:
         icon_label.pack(side="left", padx=(0, 8))
         ctk.CTkLabel(
             header_row,
-            text=item_name,
+            text=opportunity.item_name,
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=PALETTE["text"],
             anchor="w",
         ).pack(side="left", fill="x", expand=True)
 
-        profitable = sorted(
-            (o for o in item_opportunities if o.profit > 0),
-            key=profit_percent,
-            reverse=True,
-        )
-        if not profitable:
-            ctk.CTkLabel(
-                card,
-                text="Aucune opportunité rentable.",
-                text_color=PALETTE["text_muted"],
-                anchor="w",
-            ).pack(fill="x", padx=12, pady=(0, 10))
-            return icon_label
-
-        for opportunity in profitable:
-            self._render_opportunity_row(card, opportunity)
+        self._render_opportunity_row(card, opportunity)
         ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
         return icon_label
 
