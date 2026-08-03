@@ -135,6 +135,7 @@ PLATFORMS = [
     ("csmoney", "CS.Money"),
     ("waxpeer", "Waxpeer"),
     ("csdeals", "CS.Deals"),
+    ("whitemarket", "White.market"),
 ]
 
 
@@ -263,7 +264,7 @@ class ItemBrowserApp:
         )
         ctk.CTkLabel(
             parent,
-            text="Ou scanner tout le catalogue (Skinport/Waxpeer/CS.Deals) entre deux prix :",
+            text="Ou scanner tout le catalogue (Skinport/Waxpeer/CS.Deals/White.market) entre deux prix :",
             text_color=PALETTE["text_muted"],
         ).pack(anchor="w", padx=12)
 
