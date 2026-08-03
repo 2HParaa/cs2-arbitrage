@@ -57,14 +57,15 @@ def collect_normalized_prices(items, sources):
 
 
 def main():
-    items, selected_platforms, scan_min_price, scan_max_price = run_item_browser()
+    items, selected_platforms, scan_min_price, scan_max_price, scan_categories = run_item_browser()
 
     if scan_max_price is not None:
         print(
             f"Scan du catalogue Skinport/Waxpeer/CS.Deals/White.market/market.csgo.com "
-            f"entre {scan_min_price} et {scan_max_price} USD..."
+            f"entre {scan_min_price} et {scan_max_price} USD "
+            f"({len(scan_categories)} catégorie(s) incluse(s))..."
         )
-        opportunities = run_catalog_scan(scan_min_price, scan_max_price)
+        opportunities = run_catalog_scan(scan_min_price, scan_max_price, scan_categories)
         print(generate_report(opportunities))  # trace texte en console, en plus de la fenêtre
         show_report(opportunities)
         return

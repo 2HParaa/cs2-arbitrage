@@ -1,4 +1,5 @@
 from decimal import Decimal
+from urllib.parse import urlparse
 
 from cs2_arbitrage.compare import Opportunity, compare
 from cs2_arbitrage.normalize import normalize
@@ -40,10 +41,48 @@ from cs2_arbitrage.sources.whitemarket import fetch_items as fetch_whitemarket_i
 # CS.Deals n'a pas de champ de volume/offres (cf. sources/csdeals.py) :
 # pas de filtre possible sur cette source.
 
+# Filtre par catégorie (décision utilisateur du 2026-08-03, suite à des
+# opportunités jugées peu fiables sur des stickers à liquidité fine) :
+# contrairement au navigateur manuel (catalog.py TYPE_LABELS), limité aux
+# skins d'armes, le scan porte sur tout le catalogue Skinport donc expose
+# toutes les catégories qui ont un volume significatif d'items (vérifié en
+# réel le 2026-08-03 : gift/tag/tool ont 1 à 3 items au total sur ~25 000,
+# exclues comme non pertinentes). Skinport étant la plateforme de référence
+# du scan, filtrer sur sa catégorie suffit à filtrer tout le scan (cf.
+# fetch_scan_prices : seuls les noms qualifiés par Skinport sont retenus,
+# quelle que soit leur catégorie sur les autres sources).
+SCAN_CATEGORY_LABELS = {
+    "rifle": "Fusils",
+    "pistol": "Pistolets",
+    "smg": "SMG",
+    "heavy": "Heavy",
+    "knife": "Couteaux",
+    "gloves": "Gants",
+    "sticker": "Stickers",
+    "graffiti": "Graffitis",
+    "container": "Caisses",
+    "charm": "Porte-clés",
+    "music-kit": "Kits musicaux",
+    "patch": "Patchs",
+    "agent": "Agents",
+    "equipment": "Équipement",
+    "collectible": "Objets de collection",
+    "pass": "Pass",
+    "key": "Clés",
+}
 
-def _skinport_catalog_prices():
+
+def _scan_category_slug(market_page: str) -> str | None:
+    parts = [p for p in urlparse(market_page).path.split("/") if p]
+    # ex: ["market", "rifle", "ak-47"] -> "rifle"
+    return parts[1] if len(parts) > 1 else None
+
+
+def _skinport_catalog_prices(categories: set[str] | None = None):
     for item in fetch_skinport_items(currency="USD"):
         if item.get("min_price") is None:
+            continue
+        if categories is not None and _scan_category_slug(item["market_page"]) not in categories:
             continue
         quantity = item.get("quantity")
         if quantity is not None and int(quantity) < MIN_VOLUME_FOR_CONFIDENCE:
@@ -80,7 +119,9 @@ def _marketcsgo_catalog_prices():
         yield item["market_hash_name"], Decimal(item["price"]), "marketcsgo"
 
 
-def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
+def fetch_scan_prices(
+    min_price: Decimal, max_price: Decimal, categories: set[str] | None = None
+) -> list[Price]:
     """Prix, sur Skinport/Waxpeer/CS.Deals/White.market, de tout item dont
     le prix Skinport (plateforme de référence) est entre min_price et
     max_price (bornes incluses). Un seul appel réseau par plateforme (4 au
@@ -93,10 +134,13 @@ def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
     (cf. compare.MAX_SANE_PROFIT_PERCENT pour le filtre symétrique côté
     profit relatif).
 
+    categories restreint aux slugs Skinport indiqués (cf.
+    SCAN_CATEGORY_LABELS) ; None (par défaut) ne filtre pas.
+
     Les prix Waxpeer/CS.Deals/White.market/market.csgo.com des items
     qualifiés sont inclus tels quels, même au-dessus de max_price (jambe de
     vente potentielle — c'est tout l'intérêt de l'arbitrage)."""
-    skinport_prices = list(_skinport_catalog_prices())
+    skinport_prices = list(_skinport_catalog_prices(categories))
     qualifying_items = {
         name for name, amount, _ in skinport_prices if min_price <= amount <= max_price
     }
@@ -114,13 +158,16 @@ def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
     return prices
 
 
-def run_catalog_scan(min_price: Decimal, max_price: Decimal) -> list[Opportunity]:
+def run_catalog_scan(
+    min_price: Decimal, max_price: Decimal, categories: set[str] | None = None
+) -> list[Opportunity]:
     """Opportunités rentables sur tout le catalogue entre min_price et
-    max_price. Ne renvoie que les opportunités profitables (profit > 0) :
-    contrairement à la sélection manuelle d'items, où l'utilisateur veut
-    voir même les items sans opportunité qu'il a choisis exprès, un scan
-    large n'a d'intérêt que pour les vraies trouvailles."""
-    prices = fetch_scan_prices(min_price, max_price)
+    max_price, restreint aux catégories indiquées (cf. fetch_scan_prices).
+    Ne renvoie que les opportunités profitables (profit > 0) : contrairement
+    à la sélection manuelle d'items, où l'utilisateur veut voir même les
+    items sans opportunité qu'il a choisis exprès, un scan large n'a
+    d'intérêt que pour les vraies trouvailles."""
+    prices = fetch_scan_prices(min_price, max_price, categories)
     normalized_prices = [normalize(price) for price in prices]
     opportunities = compare(normalized_prices)
     return [opportunity for opportunity in opportunities if opportunity.profit > 0]
