@@ -5,6 +5,18 @@ import pytest
 
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource, fetch_items
 
+
+@pytest.fixture(autouse=True)
+def clear_fetch_items_cache():
+    # fetch_items est mis en cache par devise (cf. skinport.py) pour
+    # partager un seul appel réseau entre catalog.py/SkinportSource/
+    # scanner.py au sein d'une même exécution : sans ce nettoyage, un test
+    # récupérerait le catalogue mocké d'un test précédent au lieu du sien.
+    fetch_items.cache_clear()
+    yield
+    fetch_items.cache_clear()
+
+
 CATALOG = [
     {
         "market_hash_name": "AK-47 | Redline (Field-Tested)",
