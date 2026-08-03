@@ -276,3 +276,62 @@ def test_run_catalog_scan_best_opportunity_buys_on_skinport_sells_on_csdeals(
     best = max(opportunities, key=lambda o: o.profit)
     assert best.buy_source == "skinport"
     assert best.sell_source == "csdeals"
+
+
+@patch("cs2_arbitrage.scanner.fetch_marketcsgo_items")
+@patch("cs2_arbitrage.scanner.fetch_whitemarket_items")
+@patch("cs2_arbitrage.scanner.fetch_csdeals_items")
+@patch("cs2_arbitrage.scanner.fetch_waxpeer_items")
+@patch("cs2_arbitrage.scanner.fetch_skinport_items")
+def test_fetch_scan_prices_filters_skinport_reference_by_category(
+    mock_skinport, mock_waxpeer, mock_csdeals, mock_whitemarket, mock_marketcsgo
+):
+    mock_skinport.return_value = [
+        {
+            "market_hash_name": "Cheap Sticker",
+            "min_price": 2.0,
+            "quantity": 50,
+            "market_page": "https://skinport.com/market/sticker/team?item=Foo",
+        },
+        {
+            "market_hash_name": "Cheap Knife",
+            "min_price": 2.0,
+            "quantity": 50,
+            "market_page": "https://skinport.com/market/knife/karambit?item=Bar",
+        },
+    ]
+    mock_waxpeer.return_value = []
+    mock_csdeals.return_value = []
+    mock_whitemarket.return_value = []
+    mock_marketcsgo.return_value = []
+
+    prices = fetch_scan_prices(Decimal(0), Decimal(5), categories={"knife"})
+
+    names = {price.item_name for price in prices}
+    assert names == {"Cheap Knife"}
+
+
+@patch("cs2_arbitrage.scanner.fetch_marketcsgo_items")
+@patch("cs2_arbitrage.scanner.fetch_whitemarket_items")
+@patch("cs2_arbitrage.scanner.fetch_csdeals_items")
+@patch("cs2_arbitrage.scanner.fetch_waxpeer_items")
+@patch("cs2_arbitrage.scanner.fetch_skinport_items")
+def test_fetch_scan_prices_no_category_filter_by_default(
+    mock_skinport, mock_waxpeer, mock_csdeals, mock_whitemarket, mock_marketcsgo
+):
+    mock_skinport.return_value = [
+        {
+            "market_hash_name": "Cheap Sticker",
+            "min_price": 2.0,
+            "quantity": 50,
+            "market_page": "https://skinport.com/market/sticker/team?item=Foo",
+        },
+    ]
+    mock_waxpeer.return_value = []
+    mock_csdeals.return_value = []
+    mock_whitemarket.return_value = []
+    mock_marketcsgo.return_value = []
+
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
+
+    assert {price.item_name for price in prices} == {"Cheap Sticker"}

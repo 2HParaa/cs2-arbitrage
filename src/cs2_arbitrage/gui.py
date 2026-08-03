@@ -11,6 +11,7 @@ from PIL import Image
 from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
 from cs2_arbitrage.compare import Opportunity, profit_percent
 from cs2_arbitrage.exchange_rate import ExchangeRateError, fetch_usd_to_eur_rate
+from cs2_arbitrage.scanner import SCAN_CATEGORY_LABELS
 
 STEAM_WALLET_WARNING = "Steam Wallet uniquement, non retirable en cash"
 CENT = Decimal("0.01")
@@ -162,6 +163,7 @@ class ItemBrowserApp:
         self.result_platforms: list[str] = []
         self.result_scan_min_price: Decimal | None = None
         self.result_scan_max_price: Decimal | None = None
+        self.result_scan_categories: set[str] | None = None
 
         self.root.title("CS2 Arbitrage — Choisir des items")
         self.root.geometry("720x800")
@@ -272,6 +274,8 @@ class ItemBrowserApp:
             text_color=PALETTE["text_muted"],
         ).pack(anchor="w", padx=12)
 
+        self._build_category_section(parent)
+
         self.scan_min_slider, self.scan_min_price_label = self._build_scan_slider_row(
             parent,
             "Minimum",
@@ -303,6 +307,43 @@ class ItemBrowserApp:
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self._launch_scan,
         ).pack(fill="x", padx=12, pady=(4, 12))
+
+    def _build_category_section(self, parent: ctk.CTkFrame) -> None:
+        # Filtre par catégorie (cf. scanner.py SCAN_CATEGORY_LABELS),
+        # ajouté suite à des opportunités jugées peu fiables sur des
+        # stickers à liquidité fine — permet de les exclure du scan plutôt
+        # que de les découvrir après coup dans les résultats. Grille à 4
+        # colonnes dans un cadre à hauteur fixe (comme "Items sélectionnés"
+        # plus haut) pour ne pas allonger indéfiniment la fenêtre avec 17
+        # catégories.
+        ctk.CTkLabel(
+            parent,
+            text="Catégories incluses dans le scan :",
+            text_color=PALETTE["text_muted"],
+        ).pack(anchor="w", padx=12, pady=(8, 2))
+
+        categories_frame = ctk.CTkScrollableFrame(
+            parent,
+            height=90,
+            fg_color=PALETTE["surface_alt"],
+            scrollbar_button_color=PALETTE["surface_hover"],
+        )
+        categories_frame.pack(fill="x", padx=12, pady=(0, 8))
+
+        self.category_vars: dict[str, tk.BooleanVar] = {}
+        columns = 4
+        for index, (slug, label) in enumerate(SCAN_CATEGORY_LABELS.items()):
+            variable = tk.BooleanVar(value=True)
+            self.category_vars[slug] = variable
+            ctk.CTkCheckBox(
+                categories_frame,
+                text=label,
+                variable=variable,
+                fg_color=PALETTE["accent"],
+                hover_color=PALETTE["accent_hover"],
+                checkmark_color=PALETTE["accent_text"],
+                text_color=PALETTE["text"],
+            ).grid(row=index // columns, column=index % columns, sticky="w", padx=6, pady=3)
 
     def _build_scan_slider_row(
         self,
@@ -587,6 +628,9 @@ class ItemBrowserApp:
         # minimum au-dessus du maximum, on les remet dans le bon ordre
         # plutôt que d'exiger qu'il les ajuste lui-même dans le bon sens.
         self.result_scan_min_price, self.result_scan_max_price = sorted([min_price, max_price])
+        self.result_scan_categories = {
+            slug for slug, var in self.category_vars.items() if var.get()
+        }
         self.root.destroy()
 
     def _on_close(self) -> None:
@@ -594,10 +638,11 @@ class ItemBrowserApp:
         self.result_platforms = []
         self.result_scan_min_price = None
         self.result_scan_max_price = None
+        self.result_scan_categories = None
         self.root.destroy()
 
 
-def run_item_browser() -> tuple[list[str], list[str], Decimal | None, Decimal | None]:
+def run_item_browser() -> tuple[list[str], list[str], Decimal | None, Decimal | None, set | None]:
     root = ctk.CTk()
     _install_benign_tcl_error_filter(root)
     app = ItemBrowserApp(root, ItemCatalog())
@@ -607,6 +652,7 @@ def run_item_browser() -> tuple[list[str], list[str], Decimal | None, Decimal | 
         app.result_platforms,
         app.result_scan_min_price,
         app.result_scan_max_price,
+        app.result_scan_categories,
     )
 
 
@@ -735,6 +781,30 @@ class ReportApp:
         sell_net_amount, _ = _to_display_currency(opportunity.sell_net_price, self.eur_rate)
         profit_amount = sell_net_amount - buy_amount
 
+        # profit_frame packé AVANT text_frame : c'est un widget à taille
+        # fixe (side="right"), il doit réserver sa place dans la cavité en
+        # premier. Repéré le 2026-08-03 (bug utilisateur, disparition du
+        # bloc profit sur un scan avec beaucoup de résultats) : dans
+        # l'ordre inverse, text_frame (fill="x", expand=True) packé en
+        # premier réclame toute la largeur disponible de la ligne à cet
+        # instant-là, ne laissant plus de place pour profit_frame packé
+        # ensuite — idiome Tk classique, l'ordre de pack() (pas le side)
+        # détermine qui réserve son espace en premier.
+        profit_frame = ctk.CTkFrame(row, fg_color="transparent")
+        profit_frame.pack(side="right", padx=12)
+        ctk.CTkLabel(
+            profit_frame,
+            text=f"+{profit_amount} {currency}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=PALETTE["profit"],
+        ).pack()
+        ctk.CTkLabel(
+            profit_frame,
+            text=f"+{profit_percent(opportunity):.1f}%",
+            font=ctk.CTkFont(size=12),
+            text_color=PALETTE["profit"],
+        ).pack()
+
         text_frame = ctk.CTkFrame(row, fg_color="transparent")
         text_frame.pack(side="left", fill="x", expand=True, padx=10, pady=8)
         ctk.CTkLabel(
@@ -764,21 +834,6 @@ class ReportApp:
                 font=ctk.CTkFont(size=11),
                 anchor="w",
             ).pack(fill="x")
-
-        profit_frame = ctk.CTkFrame(row, fg_color="transparent")
-        profit_frame.pack(side="right", padx=12)
-        ctk.CTkLabel(
-            profit_frame,
-            text=f"+{profit_amount} {currency}",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=PALETTE["profit"],
-        ).pack()
-        ctk.CTkLabel(
-            profit_frame,
-            text=f"+{profit_percent(opportunity):.1f}%",
-            font=ctk.CTkFont(size=12),
-            text_color=PALETTE["profit"],
-        ).pack()
 
     # -- Chargement des icônes en arrière-plan ---------------------------
 
