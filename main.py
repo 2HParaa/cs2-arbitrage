@@ -4,6 +4,7 @@ from cs2_arbitrage.compare import compare
 from cs2_arbitrage.gui import run_item_browser, show_report
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.report import generate_report
+from cs2_arbitrage.scanner import run_catalog_scan
 from cs2_arbitrage.sources.csdeals import CSDealsError, CSDealsSource
 from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
@@ -50,7 +51,15 @@ def collect_normalized_prices(items, sources):
 
 
 def main():
-    items, selected_platforms = run_item_browser()
+    items, selected_platforms, scan_max_price = run_item_browser()
+
+    if scan_max_price is not None:
+        print(f"Scan du catalogue Skinport/Waxpeer/CS.Deals sous {scan_max_price} USD...")
+        opportunities = run_catalog_scan(scan_max_price)
+        print(generate_report(opportunities))  # trace texte en console, en plus de la fenêtre
+        show_report(opportunities)
+        return
+
     if not items or not selected_platforms:
         print("Aucun item ou aucune plateforme sélectionnée.")
         return
