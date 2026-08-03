@@ -3,28 +3,37 @@ import queue
 import threading
 import tkinter as tk
 from collections import defaultdict
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import customtkinter as ctk
 from PIL import Image
 
 from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
 from cs2_arbitrage.compare import Opportunity, profit_percent
+from cs2_arbitrage.exchange_rate import ExchangeRateError, fetch_usd_to_eur_rate
 
 STEAM_WALLET_WARNING = "Steam Wallet uniquement, non retirable en cash"
+CENT = Decimal("0.01")
 
 ICON_DISPLAY_SIZE = 96
 ICON_HEADER_SIZE = 192
+REPORT_ICON_SIZE = 64
 ICON_POLL_INTERVAL_MS = 50
 MAX_DISPLAYED_ITEMS = 150
 
-# Scan "tout le catalogue sous $X" : limité à Skinport/Waxpeer/CS.Deals
-# (cf. scanner.py), Skinport servant de référence pour le seuil. Plage de
-# la molette pensée pour de la chasse aux bonnes affaires, pas pour cibler
-# des items chers.
-SCAN_MIN_PRICE = 1
-SCAN_MAX_PRICE = 100
-SCAN_DEFAULT_PRICE = 10
+# Scan "tout le catalogue entre $X et $Y" : limité à Skinport/Waxpeer/
+# CS.Deals (cf. scanner.py), Skinport servant de référence pour les deux
+# seuils. Plages des molettes pensées pour de la chasse aux bonnes
+# affaires, pas pour cibler des items chers. Le plancher par défaut
+# (0.50) écarte déjà le bruit des items à 1-2 centimes, où un écart "à
+# 100%" n'est souvent que le pas minimum de cotation entre deux
+# plateformes plutôt qu'une vraie opportunité.
+SCAN_PRICE_FLOOR_MIN = 0
+SCAN_PRICE_FLOOR_MAX = 20
+SCAN_PRICE_FLOOR_DEFAULT = Decimal("0.5")
+SCAN_PRICE_CEIL_MIN = 1
+SCAN_PRICE_CEIL_MAX = 100
+SCAN_PRICE_CEIL_DEFAULT = 10
 
 # Charte graphique "Obsidian Gold" : fond ardoise très sombre, accent ambre
 # (rappelle l'or/les objets rares plutôt qu'un thème "gamer" saturé), une
@@ -48,6 +57,76 @@ PALETTE = {
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
+# Optimisation mineure : évite les appels Windows API de détection DPI à
+# chaque tick de la boucle de surveillance interne de customtkinter,
+# inutile ici (fenêtres à taille fixe). Ne suffit PAS à éliminer le bruit
+# ci-dessous (vérifié en lisant scaling_tracker.py : la boucle elle-même
+# n'est pas conditionnée par ce flag, seul le calcul DPI l'est).
+ctk.deactivate_automatic_dpi_awareness()
+
+
+def _install_benign_tcl_error_filter(root: ctk.CTk) -> None:
+    """La boucle de surveillance DPI de customtkinter se reprogramme en
+    continu via after() ; à la destruction d'une fenêtre, un appel reste en
+    attente et Tcl râle une fois ("invalid command name ...") sur le tick
+    suivant. Repéré le 2026-08-03 en enchaînant navigateur -> rapport (deux
+    fenêtres CTk successives). Inoffensif (aucun impact sur le
+    fonctionnement, confirmé en testant l'enchaînement complet) mais
+    bruyant en console.
+
+    Deux couches de filtrage, pas une seule :
+    - report_callback_exception attrape les vraies exceptions Python levées
+      DANS un callback Tk (ex: un bug dans la boucle de chargement des
+      icônes) — utile à garder visible, donc pas désactivé globalement.
+    - Le bruit qui nous intéresse ici n'est PAS une exception Python : Tcl
+      ne trouve même plus la commande à appeler (widget détruit) et le
+      signale via son propre mécanisme d'erreur "en arrière-plan" (bgerror),
+      qui ne passe jamais par le pont Python — d'où la redéfinition de
+      bgerror ci-dessous, seule couche qui l'intercepte réellement (vérifié
+      : report_callback_exception seul ne suffisait pas)."""
+
+    def _filtered(exc, val, tb):
+        if issubclass(exc, tk.TclError) and "invalid command name" in str(val):
+            return
+        import traceback
+
+        traceback.print_exception(exc, val, tb)
+
+    root.report_callback_exception = _filtered
+    root.tk.eval(
+        """
+        proc bgerror {msg} {
+            if {[string match {invalid command name*} $msg]} {
+                return
+            }
+            puts stderr $msg
+        }
+        """
+    )
+
+
+def _ctk_image(image: Image.Image, size: int) -> ctk.CTkImage:
+    return ctk.CTkImage(light_image=image, dark_image=image, size=(size, size))
+
+
+def _fetch_display_rate() -> Decimal | None:
+    # None si le taux n'a pas pu être récupéré (réseau indisponible...) :
+    # l'affichage retombe alors sur USD plutôt que d'afficher un montant
+    # faux sous une étiquette EUR.
+    try:
+        return fetch_usd_to_eur_rate()
+    except ExchangeRateError:
+        return None
+
+
+def _to_display_currency(amount: Decimal, rate: Decimal | None) -> tuple[Decimal, str]:
+    """Convertit un montant USD (l'unité de tout le pipeline, cf.
+    main.py) en EUR pour l'AFFICHAGE seulement, si un taux est
+    disponible."""
+    if rate is None:
+        return amount, "USD"
+    return (amount * rate).quantize(CENT, rounding=ROUND_HALF_UP), "EUR"
+
 
 # (nom interne PriceSource.name, libellé affiché), toutes cochées par défaut.
 PLATFORMS = [
@@ -69,6 +148,7 @@ class ItemBrowserApp:
         self.catalog = catalog
         self.path: list[str] = []
         self.selected_items: set[str] = set()
+        self.eur_rate = _fetch_display_rate()
         # market_hash_name -> PIL.Image brute (pas encore mise à la taille
         # d'affichage) : permet de reconstruire un CTkImage à la taille
         # voulue (liste vs en-tête agrandi) sans redemander l'image.
@@ -78,6 +158,7 @@ class ItemBrowserApp:
         self.current_skin_hash_name = None
         self.result_items: list[str] = []
         self.result_platforms: list[str] = []
+        self.result_scan_min_price: Decimal | None = None
         self.result_scan_max_price: Decimal | None = None
 
         self.root.title("CS2 Arbitrage — Choisir des items")
@@ -182,35 +263,29 @@ class ItemBrowserApp:
         )
         ctk.CTkLabel(
             parent,
-            text="Ou scanner tout le catalogue (Skinport/Waxpeer/CS.Deals) sous un prix :",
+            text="Ou scanner tout le catalogue (Skinport/Waxpeer/CS.Deals) entre deux prix :",
             text_color=PALETTE["text_muted"],
         ).pack(anchor="w", padx=12)
 
-        slider_row = ctk.CTkFrame(parent, fg_color="transparent")
-        slider_row.pack(fill="x", padx=12, pady=(4, 8))
-
-        self.scan_price_label = ctk.CTkLabel(
-            slider_row,
-            text=f"{SCAN_DEFAULT_PRICE:.2f} USD",
-            width=90,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=PALETTE["accent"],
+        self.scan_min_slider, self.scan_min_price_label = self._build_scan_slider_row(
+            parent,
+            "Minimum",
+            SCAN_PRICE_FLOOR_MIN,
+            SCAN_PRICE_FLOOR_MAX,
+            SCAN_PRICE_FLOOR_DEFAULT,
+            # Pas de 0.50 $ (40 crans sur 0-20) : assez fin pour écarter
+            # spécifiquement le bruit des tout petits prix (1-2 centimes)
+            # sans pour autant viser une précision au centime inutile ici.
+            number_of_steps=(SCAN_PRICE_FLOOR_MAX - SCAN_PRICE_FLOOR_MIN) * 2,
         )
-        self.scan_price_label.pack(side="right")
-
-        self.scan_slider = ctk.CTkSlider(
-            slider_row,
-            from_=SCAN_MIN_PRICE,
-            to=SCAN_MAX_PRICE,
-            number_of_steps=SCAN_MAX_PRICE - SCAN_MIN_PRICE,
-            fg_color=PALETTE["surface_alt"],
-            progress_color=PALETTE["accent"],
-            button_color=PALETTE["accent"],
-            button_hover_color=PALETTE["accent_hover"],
-            command=self._on_scan_slider_change,
+        self.scan_max_slider, self.scan_max_price_label = self._build_scan_slider_row(
+            parent,
+            "Maximum",
+            SCAN_PRICE_CEIL_MIN,
+            SCAN_PRICE_CEIL_MAX,
+            SCAN_PRICE_CEIL_DEFAULT,
+            number_of_steps=SCAN_PRICE_CEIL_MAX - SCAN_PRICE_CEIL_MIN,
         )
-        self.scan_slider.set(SCAN_DEFAULT_PRICE)
-        self.scan_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
         ctk.CTkButton(
             parent,
@@ -222,10 +297,55 @@ class ItemBrowserApp:
             text_color=PALETTE["text"],
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self._launch_scan,
-        ).pack(fill="x", padx=12, pady=(0, 12))
+        ).pack(fill="x", padx=12, pady=(4, 12))
 
-    def _on_scan_slider_change(self, value: float) -> None:
-        self.scan_price_label.configure(text=f"{value:.2f} USD")
+    def _build_scan_slider_row(
+        self,
+        parent: ctk.CTkFrame,
+        label_text: str,
+        from_: float,
+        to: float,
+        default: Decimal,
+        number_of_steps: int,
+    ) -> tuple[ctk.CTkSlider, ctk.CTkLabel]:
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 4))
+
+        ctk.CTkLabel(row, text=label_text, width=60, text_color=PALETTE["text_muted"]).pack(
+            side="left"
+        )
+        price_label = ctk.CTkLabel(
+            row,
+            text=self._format_scan_price(float(default)),
+            width=90,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=PALETTE["accent"],
+        )
+        price_label.pack(side="right")
+
+        slider = ctk.CTkSlider(
+            row,
+            from_=from_,
+            to=to,
+            number_of_steps=number_of_steps,
+            fg_color=PALETTE["surface_alt"],
+            progress_color=PALETTE["accent"],
+            button_color=PALETTE["accent"],
+            button_hover_color=PALETTE["accent_hover"],
+            command=lambda value, label=price_label: label.configure(
+                text=self._format_scan_price(value)
+            ),
+        )
+        slider.set(float(default))
+        slider.pack(side="left", fill="x", expand=True, padx=(8, 10))
+        return slider, price_label
+
+    def _format_scan_price(self, usd_value: float) -> str:
+        # La molette manipule des dollars en interne (c'est ce qui est
+        # comparé au catalogue Skinport, en USD) : seul l'affichage est
+        # converti en EUR, cf. _to_display_currency.
+        amount, currency = _to_display_currency(Decimal(str(usd_value)), self.eur_rate)
+        return f"{amount:.2f} {currency}"
 
     # -- Navigation ---------------------------------------------------
 
@@ -312,7 +432,7 @@ class ItemBrowserApp:
             row = ctk.CTkFrame(self.body_frame, fg_color="transparent")
             row.pack(fill="x", pady=3)
             icon_label = ctk.CTkLabel(
-                row, text="", image=self._ctk_image(self.placeholder_image, ICON_DISPLAY_SIZE)
+                row, text="", image=_ctk_image(self.placeholder_image, ICON_DISPLAY_SIZE)
             )
             icon_label.pack(side="left", padx=(0, 8))
             ctk.CTkButton(
@@ -336,9 +456,7 @@ class ItemBrowserApp:
         variants = self.catalog.fetch_variants(item_type, weapon, skin)
 
         image = self.icon_cache.get(self.current_skin_hash_name, self.placeholder_image)
-        header = ctk.CTkLabel(
-            self.body_frame, text="", image=self._ctk_image(image, ICON_HEADER_SIZE)
-        )
+        header = ctk.CTkLabel(self.body_frame, text="", image=_ctk_image(image, ICON_HEADER_SIZE))
         header.pack(pady=8)
 
         if not variants:
@@ -359,9 +477,6 @@ class ItemBrowserApp:
             ).pack(fill="x", pady=2)
 
     # -- Chargement des images en arrière-plan --------------------------
-
-    def _ctk_image(self, image: Image.Image, size: int) -> ctk.CTkImage:
-        return ctk.CTkImage(light_image=image, dark_image=image, size=(size, size))
 
     def _load_icons_async(
         self, hash_names: list[str], labels: list[ctk.CTkLabel], generation: int
@@ -404,7 +519,7 @@ class ItemBrowserApp:
                     self.icon_cache[hash_name] = image
                 cached = self.icon_cache.get(hash_name)
                 if cached is not None and index < len(labels):
-                    labels[index].configure(image=self._ctk_image(cached, ICON_DISPLAY_SIZE))
+                    labels[index].configure(image=_ctk_image(cached, ICON_DISPLAY_SIZE))
         except queue.Empty:
             pass
 
@@ -461,21 +576,33 @@ class ItemBrowserApp:
         self.root.destroy()
 
     def _launch_scan(self) -> None:
-        self.result_scan_max_price = Decimal(str(round(self.scan_slider.get(), 2)))
+        min_price = Decimal(str(round(self.scan_min_slider.get(), 2)))
+        max_price = Decimal(str(round(self.scan_max_slider.get(), 2)))
+        # Les deux molettes sont indépendantes : si l'utilisateur met le
+        # minimum au-dessus du maximum, on les remet dans le bon ordre
+        # plutôt que d'exiger qu'il les ajuste lui-même dans le bon sens.
+        self.result_scan_min_price, self.result_scan_max_price = sorted([min_price, max_price])
         self.root.destroy()
 
     def _on_close(self) -> None:
         self.result_items = []
         self.result_platforms = []
+        self.result_scan_min_price = None
         self.result_scan_max_price = None
         self.root.destroy()
 
 
-def run_item_browser() -> tuple[list[str], list[str], Decimal | None]:
+def run_item_browser() -> tuple[list[str], list[str], Decimal | None, Decimal | None]:
     root = ctk.CTk()
+    _install_benign_tcl_error_filter(root)
     app = ItemBrowserApp(root, ItemCatalog())
     root.mainloop()
-    return app.result_items, app.result_platforms, app.result_scan_max_price
+    return (
+        app.result_items,
+        app.result_platforms,
+        app.result_scan_min_price,
+        app.result_scan_max_price,
+    )
 
 
 class ReportApp:
@@ -489,6 +616,9 @@ class ReportApp:
 
     def __init__(self, root: ctk.CTk, opportunities: list[Opportunity]):
         self.root = root
+        self.eur_rate = _fetch_display_rate()
+        self.icon_cache: dict[str, Image.Image] = {}
+        self.placeholder_image = Image.new("RGBA", (8, 8), PALETTE["surface_alt"])
         self.root.title("CS2 Arbitrage — Résultats")
         self.root.geometry("720x700")
         self.root.minsize(600, 560)
@@ -522,8 +652,11 @@ class ReportApp:
         body = ctk.CTkScrollableFrame(self.root, fg_color=PALETTE["bg"])
         body.pack(fill="both", expand=True, padx=12, pady=4)
 
+        icon_labels = []
         for item_name, item_opportunities in displayed_items:
-            self._render_item_card(body, item_name, item_opportunities)
+            icon_label = self._render_item_card(body, item_name, item_opportunities)
+            icon_labels.append((item_name, icon_label))
+        self._load_icons_async(icon_labels)
 
         ctk.CTkButton(
             self.root,
@@ -546,17 +679,23 @@ class ReportApp:
 
     def _render_item_card(
         self, parent: ctk.CTkFrame, item_name: str, item_opportunities: list[Opportunity]
-    ) -> None:
+    ) -> ctk.CTkLabel:
         card = ctk.CTkFrame(parent, fg_color=PALETTE["surface"], corner_radius=10)
         card.pack(fill="x", pady=6)
 
+        header_row = ctk.CTkFrame(card, fg_color="transparent")
+        header_row.pack(fill="x", padx=12, pady=(10, 4))
+        icon_label = ctk.CTkLabel(
+            header_row, text="", image=_ctk_image(self.placeholder_image, REPORT_ICON_SIZE)
+        )
+        icon_label.pack(side="left", padx=(0, 8))
         ctk.CTkLabel(
-            card,
+            header_row,
             text=item_name,
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=PALETTE["text"],
             anchor="w",
-        ).pack(fill="x", padx=12, pady=(10, 4))
+        ).pack(side="left", fill="x", expand=True)
 
         profitable = sorted(
             (o for o in item_opportunities if o.profit > 0),
@@ -570,39 +709,44 @@ class ReportApp:
                 text_color=PALETTE["text_muted"],
                 anchor="w",
             ).pack(fill="x", padx=12, pady=(0, 10))
-            return
+            return icon_label
 
         for opportunity in profitable:
             self._render_opportunity_row(card, opportunity)
         ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
+        return icon_label
 
     def _render_opportunity_row(self, parent: ctk.CTkFrame, opportunity: Opportunity) -> None:
         row = ctk.CTkFrame(parent, fg_color=PALETTE["surface_alt"], corner_radius=8)
         row.pack(fill="x", padx=12, pady=3)
 
+        # Conversion pour l'affichage seulement (utilisateur français) : le
+        # pipeline entier reste en USD, cf. _to_display_currency. Le profit
+        # affiché est dérivé des montants déjà convertis (pas reconverti
+        # séparément) pour rester cohérent au centime près avec ce qui est
+        # montré juste au-dessus.
+        buy_amount, currency = _to_display_currency(opportunity.buy_price, self.eur_rate)
+        sell_gross_amount, _ = _to_display_currency(opportunity.sell_gross_price, self.eur_rate)
+        sell_net_amount, _ = _to_display_currency(opportunity.sell_net_price, self.eur_rate)
+        profit_amount = sell_net_amount - buy_amount
+
         text_frame = ctk.CTkFrame(row, fg_color="transparent")
         text_frame.pack(side="left", fill="x", expand=True, padx=10, pady=8)
         ctk.CTkLabel(
             text_frame,
-            text=(
-                f"Acheter sur {opportunity.buy_source} "
-                f"({opportunity.buy_price} {opportunity.currency})"
-            ),
+            text=f"Acheter sur {opportunity.buy_source} ({buy_amount} {currency})",
             text_color=PALETTE["text"],
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
             text_frame,
-            text=(
-                f"→ Lister sur {opportunity.sell_source} à "
-                f"{opportunity.sell_gross_price} {opportunity.currency}"
-            ),
+            text=f"→ Lister sur {opportunity.sell_source} à {sell_gross_amount} {currency}",
             text_color=PALETTE["text"],
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
             text_frame,
-            text=(f"   (net {opportunity.sell_net_price} {opportunity.currency} après frais)"),
+            text=f"   (net {sell_net_amount} {currency} après frais)",
             text_color=PALETTE["text_muted"],
             anchor="w",
             font=ctk.CTkFont(size=11),
@@ -620,7 +764,7 @@ class ReportApp:
         profit_frame.pack(side="right", padx=12)
         ctk.CTkLabel(
             profit_frame,
-            text=f"+{opportunity.profit} {opportunity.currency}",
+            text=f"+{profit_amount} {currency}",
             font=ctk.CTkFont(size=14, weight="bold"),
             text_color=PALETTE["profit"],
         ).pack()
@@ -631,8 +775,56 @@ class ReportApp:
             text_color=PALETTE["profit"],
         ).pack()
 
+    # -- Chargement des icônes en arrière-plan ---------------------------
+
+    def _load_icons_async(self, icon_labels: list[tuple[str, ctk.CTkLabel]]) -> None:
+        # Même principe que ItemBrowserApp._load_icons_async : le thread ne
+        # touche aucun widget (pas thread-safe), il résout juste les octets
+        # (fetch_icon, Waxpeer sans throttle puis repli Steam, cache disque
+        # inclus) et les dépose dans la queue ; la création des CTkImage et
+        # l'affichage se font côté thread principal via _poll_icon_queue.
+        work_queue: queue.Queue = queue.Queue()
+
+        def worker():
+            for index, (hash_name, _label) in enumerate(icon_labels):
+                image = None
+                if hash_name not in self.icon_cache:
+                    try:
+                        image_bytes = fetch_icon(hash_name)
+                        image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+                    except CatalogError:
+                        image = None
+                work_queue.put((index, hash_name, image))
+            work_queue.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._poll_icon_queue(work_queue, icon_labels)
+
+    def _poll_icon_queue(
+        self, work_queue: "queue.Queue", icon_labels: list[tuple[str, ctk.CTkLabel]]
+    ) -> None:
+        if not self.root.winfo_exists():
+            return  # la fenêtre a été fermée pendant le chargement
+
+        try:
+            while True:
+                item = work_queue.get_nowait()
+                if item is None:
+                    return
+                index, hash_name, image = item
+                if image is not None:
+                    self.icon_cache[hash_name] = image
+                cached = self.icon_cache.get(hash_name)
+                if cached is not None:
+                    icon_labels[index][1].configure(image=_ctk_image(cached, REPORT_ICON_SIZE))
+        except queue.Empty:
+            pass
+
+        self.root.after(ICON_POLL_INTERVAL_MS, self._poll_icon_queue, work_queue, icon_labels)
+
 
 def show_report(opportunities: list[Opportunity]) -> None:
     root = ctk.CTk()
+    _install_benign_tcl_error_filter(root)
     ReportApp(root, opportunities)
     root.mainloop()

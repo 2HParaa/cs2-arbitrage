@@ -60,18 +60,26 @@ def _csdeals_catalog_prices():
         yield item["marketname"], Decimal(item["lowest_price"]), "csdeals"
 
 
-def fetch_scan_prices(max_price: Decimal) -> list[Price]:
+def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
     """Prix, sur Skinport/Waxpeer/CS.Deals, de tout item dont le prix
-    Skinport (plateforme de référence) est à max_price ou moins. Un seul
-    appel réseau par plateforme (3 au total), quel que soit le nombre
-    d'items retenus : le filtrage par prix se fait ensuite en mémoire, pas
-    côté API.
+    Skinport (plateforme de référence) est entre min_price et max_price
+    (bornes incluses). Un seul appel réseau par plateforme (3 au total),
+    quel que soit le nombre d'items retenus : le filtrage par prix se fait
+    ensuite en mémoire, pas côté API.
+
+    min_price sert surtout à écarter le bruit des items à 1-2 centimes,
+    où un écart de prix "à 100%" ne représente souvent que le pas minimum
+    de cotation entre deux plateformes plutôt qu'une vraie opportunité
+    (cf. compare.MAX_SANE_PROFIT_PERCENT pour le filtre symétrique côté
+    profit relatif).
 
     Les prix Waxpeer/CS.Deals des items qualifiés sont inclus tels quels,
-    même au-dessus du seuil (jambe de vente potentielle — c'est tout
+    même au-dessus de max_price (jambe de vente potentielle — c'est tout
     l'intérêt de l'arbitrage)."""
     skinport_prices = list(_skinport_catalog_prices())
-    qualifying_items = {name for name, amount, _ in skinport_prices if amount <= max_price}
+    qualifying_items = {
+        name for name, amount, _ in skinport_prices if min_price <= amount <= max_price
+    }
 
     prices = []
     for name, amount, source in (
@@ -84,13 +92,13 @@ def fetch_scan_prices(max_price: Decimal) -> list[Price]:
     return prices
 
 
-def run_catalog_scan(max_price: Decimal) -> list[Opportunity]:
-    """Opportunités rentables sur tout le catalogue sous max_price. Ne
-    renvoie que les opportunités profitables (profit > 0) : contrairement à
-    la sélection manuelle d'items, où l'utilisateur veut voir même les
-    items sans opportunité qu'il a choisis exprès, un scan large n'a
-    d'intérêt que pour les vraies trouvailles."""
-    prices = fetch_scan_prices(max_price)
+def run_catalog_scan(min_price: Decimal, max_price: Decimal) -> list[Opportunity]:
+    """Opportunités rentables sur tout le catalogue entre min_price et
+    max_price. Ne renvoie que les opportunités profitables (profit > 0) :
+    contrairement à la sélection manuelle d'items, où l'utilisateur veut
+    voir même les items sans opportunité qu'il a choisis exprès, un scan
+    large n'a d'intérêt que pour les vraies trouvailles."""
+    prices = fetch_scan_prices(min_price, max_price)
     normalized_prices = [normalize(price) for price in prices]
     opportunities = compare(normalized_prices)
     return [opportunity for opportunity in opportunities if opportunity.profit > 0]

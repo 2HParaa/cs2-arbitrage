@@ -37,7 +37,7 @@ def test_fetch_scan_prices_skips_low_liquidity_skinport_reference_price(
     mock_waxpeer.return_value = []
     mock_csdeals.return_value = []
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     assert prices == []
 
@@ -58,10 +58,30 @@ def test_fetch_scan_prices_skips_low_liquidity_waxpeer_price_but_keeps_others(
         {"marketname": "Item", "lowest_price": "1.80"},
     ]
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     sources = {price.source for price in prices}
     assert sources == {"skinport", "csdeals"}
+
+
+@patch("cs2_arbitrage.scanner.fetch_csdeals_items")
+@patch("cs2_arbitrage.scanner.fetch_waxpeer_items")
+@patch("cs2_arbitrage.scanner.fetch_skinport_items")
+def test_fetch_scan_prices_excludes_items_below_min_price(
+    mock_skinport, mock_waxpeer, mock_csdeals
+):
+    mock_skinport.return_value = [
+        {"market_hash_name": "Two Cent Item", "min_price": 0.02, "quantity": 50},
+        {"market_hash_name": "Cheap Sticker", "min_price": 2.0, "quantity": 50},
+    ]
+    mock_waxpeer.return_value = []
+    mock_csdeals.return_value = []
+
+    prices = fetch_scan_prices(Decimal("0.5"), Decimal(5))
+
+    names = {price.item_name for price in prices}
+    assert "Two Cent Item" not in names
+    assert "Cheap Sticker" in names
 
 
 @patch("cs2_arbitrage.scanner.fetch_csdeals_items")
@@ -72,7 +92,7 @@ def test_fetch_scan_prices_qualifies_items_by_skinport_price(
 ):
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     names = {price.item_name for price in prices}
     assert names == {"Cheap Sticker"}
@@ -88,7 +108,7 @@ def test_fetch_scan_prices_ignores_items_absent_from_skinport_even_if_cheap_else
     # de Skinport (la référence) : ne doit jamais qualifier.
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     assert "Only On Waxpeer" not in {price.item_name for price in prices}
 
@@ -101,7 +121,7 @@ def test_fetch_scan_prices_includes_all_sources_for_a_qualifying_item(
 ):
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     sticker_prices = {p.source: p.amount for p in prices if p.item_name == "Cheap Sticker"}
     assert sticker_prices == {
@@ -119,7 +139,7 @@ def test_fetch_scan_prices_excludes_items_above_threshold_on_skinport(
 ):
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     assert "Expensive Knife" not in {price.item_name for price in prices}
 
@@ -132,7 +152,7 @@ def test_fetch_scan_prices_skips_items_without_active_skinport_listing(
 ):
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    prices = fetch_scan_prices(Decimal(5))
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     assert "No Active Listing" not in {price.item_name for price in prices}
 
@@ -145,7 +165,7 @@ def test_run_catalog_scan_only_returns_profitable_opportunities(
 ):
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    opportunities = run_catalog_scan(Decimal(5))
+    opportunities = run_catalog_scan(Decimal(0), Decimal(5))
 
     assert all(opportunity.profit > 0 for opportunity in opportunities)
     assert all(opportunity.item_name == "Cheap Sticker" for opportunity in opportunities)
@@ -163,7 +183,7 @@ def test_run_catalog_scan_best_opportunity_buys_on_skinport_sells_on_csdeals(
     # restant est skinport(2.00) -> csdeals(net 3.43), +71.5%.
     _mock_all(mock_skinport, mock_waxpeer, mock_csdeals)
 
-    opportunities = run_catalog_scan(Decimal(5))
+    opportunities = run_catalog_scan(Decimal(0), Decimal(5))
 
     best = max(opportunities, key=lambda o: o.profit)
     assert best.buy_source == "skinport"
