@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import requests
 from PIL import Image, ImageOps
 
-from cs2_arbitrage.sources.skinport import fetch_items
+from cs2_arbitrage.sources.skinport import SkinportError, fetch_items
 from cs2_arbitrage.sources.steam import CS2_APP_ID
 from cs2_arbitrage.sources.waxpeer import WaxpeerError
 from cs2_arbitrage.sources.waxpeer import fetch_items as fetch_waxpeer_items
@@ -270,8 +270,13 @@ class ItemCatalog:
         if self._catalog is not None:
             return
         try:
-            self._catalog = fetch_items()
-        except requests.RequestException as error:
+            # USD, pas EUR : la devise n'a aucune importance ici (seuls
+            # market_hash_name/market_page servent, pas les prix), mais
+            # aligner sur "USD" fait partager le cache de fetch_items avec
+            # scanner.py et SkinportSource (cf. sources/skinport.py) — un
+            # seul appel réseau total par exécution plutôt que 2-3.
+            self._catalog = fetch_items(currency="USD")
+        except (requests.RequestException, SkinportError) as error:
             raise CatalogError("Impossible de charger le catalogue Skinport") from error
 
     def _type_slug(self, item_type: str) -> str:
