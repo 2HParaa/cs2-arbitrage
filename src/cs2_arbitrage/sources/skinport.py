@@ -1,5 +1,7 @@
+import time
 import warnings
 from decimal import Decimal
+from functools import cache
 
 import requests
 
@@ -8,22 +10,44 @@ from cs2_arbitrage.sources.base import MIN_VOLUME_FOR_CONFIDENCE, Price, PriceSo
 CS2_APP_ID = 730
 ITEMS_URL = "https://api.skinport.com/v1/items"
 
+MAX_ATTEMPTS = 4
+RETRY_DELAY_SECONDS = 10
+
 
 class SkinportError(Exception):
     """Erreur lors de la récupération d'un prix sur Skinport."""
 
 
+@cache
 def fetch_items(currency: str = "EUR") -> list[dict]:
-    """Catalogue complet Skinport (~25 000 items en un seul appel, jamais
-    paginé/rate-limité jusqu'ici) — réutilisé par SkinportSource ci-dessous
-    et par catalog.py pour la navigation Type/Arme/Skin."""
-    response = requests.get(
-        ITEMS_URL,
-        params={"app_id": CS2_APP_ID, "currency": currency},
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+    """Catalogue complet Skinport (~25 000 items en un seul appel) —
+    réutilisé par SkinportSource ci-dessous, par catalog.py pour la
+    navigation Type/Arme/Skin, et par scanner.py pour le scan de
+    catalogue. Mis en cache par devise pour la durée du process : ces
+    trois appelants convergent tous vers "USD" (cf. main.py), donc un
+    seul appel réseau total par exécution plutôt que 2-3.
+
+    Repéré le 2026-08-03 : sans ce cache, catalog.py (navigation) et
+    scanner.py (scan) rappelaient chacun cet endpoint dans la même
+    exécution, déclenchant un 429 (jamais observé avant, contrairement à
+    ce que suggérait le commentaire précédent). Retry avec backoff ajouté
+    par cohérence avec sources/steam.py et sources/csmoney.py."""
+    for attempt in range(MAX_ATTEMPTS):
+        response = requests.get(
+            ITEMS_URL,
+            params={"app_id": CS2_APP_ID, "currency": currency},
+            timeout=10,
+        )
+        if response.status_code == 429 and attempt < MAX_ATTEMPTS - 1:
+            time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
+            continue
+        if response.status_code == 429:
+            raise SkinportError(
+                f"Skinport limite les requêtes (429) pour le catalogue, même après "
+                f"{MAX_ATTEMPTS} tentatives"
+            )
+        response.raise_for_status()
+        return response.json()
 
 
 class SkinportSource(PriceSource):
