@@ -4,27 +4,29 @@ from cs2_arbitrage.compare import Opportunity, compare
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.sources.base import MIN_VOLUME_FOR_CONFIDENCE, Price
 from cs2_arbitrage.sources.csdeals import fetch_items as fetch_csdeals_items
+from cs2_arbitrage.sources.marketcsgo import fetch_items as fetch_marketcsgo_items
 from cs2_arbitrage.sources.skinport import fetch_items as fetch_skinport_items
 from cs2_arbitrage.sources.waxpeer import fetch_items as fetch_waxpeer_items
 from cs2_arbitrage.sources.whitemarket import fetch_items as fetch_whitemarket_items
 
 # Scan de tout le catalogue (par opposition à la sélection manuelle d'items
-# dans le navigateur) : limité à Skinport/Waxpeer/CS.Deals/White.market,
-# les seules sources qui renvoient tout leur catalogue en un appel. Steam
-# et CS.Money n'ont pas cet endpoint : leur prix se récupère un item à la
-# fois, avec throttle (1.5s / 0.7s) — scanner ~25 000 items dessus
-# prendrait des heures. Décision utilisateur du 2026-08-03 : les exclure
-# d'office pour cette fonctionnalité plutôt que d'exposer un mode "lent"
-# avec avertissement.
+# dans le navigateur) : limité à Skinport/Waxpeer/CS.Deals/White.market/
+# market.csgo.com, les seules sources qui renvoient tout leur catalogue en
+# un appel. Steam et CS.Money n'ont pas cet endpoint : leur prix se
+# récupère un item à la fois, avec throttle (1.5s / 0.7s) — scanner
+# ~25 000 items dessus prendrait des heures. Décision utilisateur du
+# 2026-08-03 : les exclure d'office pour cette fonctionnalité plutôt que
+# d'exposer un mode "lent" avec avertissement.
 #
 # Skinport sert de plateforme de référence pour le seuil de prix (décision
 # utilisateur du 2026-08-03) : c'est déjà la source du catalogue de
-# navigation ailleurs dans l'app, et la plus complète des 4 (~25 000
+# navigation ailleurs dans l'app, et la plus complète des 5 (~25 000
 # items). Un item qualifie si son prix Skinport est sous le seuil ; ses
-# prix Waxpeer/CS.Deals/White.market (jambe de vente potentielle) sont
-# inclus tels quels, même au-dessus du seuil. Limite connue : un item
-# absent de Skinport mais présent (et bon marché) ailleurs ne peut jamais
-# qualifier — accepté vu que Skinport est déjà la source la plus large.
+# prix Waxpeer/CS.Deals/White.market/market.csgo.com (jambe de vente
+# potentielle) sont inclus tels quels, même au-dessus du seuil. Limite
+# connue : un item absent de Skinport mais présent (et bon marché) ailleurs
+# ne peut jamais qualifier — accepté vu que Skinport est déjà la source la
+# plus large.
 #
 # Filtrage par liquidité (MIN_VOLUME_FOR_CONFIDENCE, même seuil que les
 # sources individuelles) : repéré le 2026-08-03 qu'au-delà des cas extrêmes
@@ -70,6 +72,14 @@ def _whitemarket_catalog_prices():
         yield item["market_hash_name"], Decimal(item["price"]), "whitemarket"
 
 
+def _marketcsgo_catalog_prices():
+    for item in fetch_marketcsgo_items():
+        volume = item.get("volume")
+        if volume is not None and int(volume) < MIN_VOLUME_FOR_CONFIDENCE:
+            continue
+        yield item["market_hash_name"], Decimal(item["price"]), "marketcsgo"
+
+
 def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
     """Prix, sur Skinport/Waxpeer/CS.Deals/White.market, de tout item dont
     le prix Skinport (plateforme de référence) est entre min_price et
@@ -83,9 +93,9 @@ def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
     (cf. compare.MAX_SANE_PROFIT_PERCENT pour le filtre symétrique côté
     profit relatif).
 
-    Les prix Waxpeer/CS.Deals/White.market des items qualifiés sont inclus
-    tels quels, même au-dessus de max_price (jambe de vente potentielle —
-    c'est tout l'intérêt de l'arbitrage)."""
+    Les prix Waxpeer/CS.Deals/White.market/market.csgo.com des items
+    qualifiés sont inclus tels quels, même au-dessus de max_price (jambe de
+    vente potentielle — c'est tout l'intérêt de l'arbitrage)."""
     skinport_prices = list(_skinport_catalog_prices())
     qualifying_items = {
         name for name, amount, _ in skinport_prices if min_price <= amount <= max_price
@@ -97,6 +107,7 @@ def fetch_scan_prices(min_price: Decimal, max_price: Decimal) -> list[Price]:
         *_waxpeer_catalog_prices(),
         *_csdeals_catalog_prices(),
         *_whitemarket_catalog_prices(),
+        *_marketcsgo_catalog_prices(),
     ):
         if name in qualifying_items:
             prices.append(Price(item_name=name, amount=amount, currency="USD", source=source))
