@@ -3,18 +3,28 @@ import queue
 import threading
 import tkinter as tk
 from collections import defaultdict
+from decimal import Decimal
 
 import customtkinter as ctk
 from PIL import Image
 
 from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
-from cs2_arbitrage.compare import Opportunity
+from cs2_arbitrage.compare import Opportunity, profit_percent
 
 STEAM_WALLET_WARNING = "Steam Wallet uniquement, non retirable en cash"
 
 ICON_DISPLAY_SIZE = 96
 ICON_HEADER_SIZE = 192
 ICON_POLL_INTERVAL_MS = 50
+MAX_DISPLAYED_ITEMS = 150
+
+# Scan "tout le catalogue sous $X" : limité à Skinport/Waxpeer/CS.Deals
+# (cf. scanner.py), Skinport servant de référence pour le seuil. Plage de
+# la molette pensée pour de la chasse aux bonnes affaires, pas pour cibler
+# des items chers.
+SCAN_MIN_PRICE = 1
+SCAN_MAX_PRICE = 100
+SCAN_DEFAULT_PRICE = 10
 
 # Charte graphique "Obsidian Gold" : fond ardoise très sombre, accent ambre
 # (rappelle l'or/les objets rares plutôt qu'un thème "gamer" saturé), une
@@ -68,10 +78,11 @@ class ItemBrowserApp:
         self.current_skin_hash_name = None
         self.result_items: list[str] = []
         self.result_platforms: list[str] = []
+        self.result_scan_max_price: Decimal | None = None
 
         self.root.title("CS2 Arbitrage — Choisir des items")
-        self.root.geometry("720x700")
-        self.root.minsize(600, 560)
+        self.root.geometry("720x800")
+        self.root.minsize(600, 720)
         self.root.configure(fg_color=PALETTE["bg"])
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -161,7 +172,60 @@ class ItemBrowserApp:
         )
         self.launch_button.pack(fill="x", padx=12, pady=(4, 12))
 
+        self._build_scan_section(frame)
+
         self._update_selected_panel()
+
+    def _build_scan_section(self, parent: ctk.CTkFrame) -> None:
+        ctk.CTkFrame(parent, fg_color=PALETTE["border"], height=1).pack(
+            fill="x", padx=12, pady=(0, 10)
+        )
+        ctk.CTkLabel(
+            parent,
+            text="Ou scanner tout le catalogue (Skinport/Waxpeer/CS.Deals) sous un prix :",
+            text_color=PALETTE["text_muted"],
+        ).pack(anchor="w", padx=12)
+
+        slider_row = ctk.CTkFrame(parent, fg_color="transparent")
+        slider_row.pack(fill="x", padx=12, pady=(4, 8))
+
+        self.scan_price_label = ctk.CTkLabel(
+            slider_row,
+            text=f"{SCAN_DEFAULT_PRICE:.2f} USD",
+            width=90,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=PALETTE["accent"],
+        )
+        self.scan_price_label.pack(side="right")
+
+        self.scan_slider = ctk.CTkSlider(
+            slider_row,
+            from_=SCAN_MIN_PRICE,
+            to=SCAN_MAX_PRICE,
+            number_of_steps=SCAN_MAX_PRICE - SCAN_MIN_PRICE,
+            fg_color=PALETTE["surface_alt"],
+            progress_color=PALETTE["accent"],
+            button_color=PALETTE["accent"],
+            button_hover_color=PALETTE["accent_hover"],
+            command=self._on_scan_slider_change,
+        )
+        self.scan_slider.set(SCAN_DEFAULT_PRICE)
+        self.scan_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        ctk.CTkButton(
+            parent,
+            text="Scanner le catalogue",
+            height=40,
+            corner_radius=10,
+            fg_color=PALETTE["surface_hover"],
+            hover_color=PALETTE["accent_hover"],
+            text_color=PALETTE["text"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._launch_scan,
+        ).pack(fill="x", padx=12, pady=(0, 12))
+
+    def _on_scan_slider_change(self, value: float) -> None:
+        self.scan_price_label.configure(text=f"{value:.2f} USD")
 
     # -- Navigation ---------------------------------------------------
 
@@ -396,23 +460,32 @@ class ItemBrowserApp:
         self.result_platforms = [name for name, var in self.platform_vars.items() if var.get()]
         self.root.destroy()
 
+    def _launch_scan(self) -> None:
+        self.result_scan_max_price = Decimal(str(round(self.scan_slider.get(), 2)))
+        self.root.destroy()
+
     def _on_close(self) -> None:
         self.result_items = []
         self.result_platforms = []
+        self.result_scan_max_price = None
         self.root.destroy()
 
 
-def run_item_browser() -> tuple[list[str], list[str]]:
+def run_item_browser() -> tuple[list[str], list[str], Decimal | None]:
     root = ctk.CTk()
     app = ItemBrowserApp(root, ItemCatalog())
     root.mainloop()
-    return app.result_items, app.result_platforms
+    return app.result_items, app.result_platforms, app.result_scan_max_price
 
 
 class ReportApp:
     """Fenêtre de résultats : une carte par item, triée par meilleure
-    opportunité décroissante (le but étant de repérer vite le plus
-    rentable), les items sans opportunité rentable relégués en bas."""
+    opportunité relative (%) décroissante — plus parlant que le montant
+    absolu pour repérer les affaires intéressantes sur des items de prix
+    très différents (cf. compare.profit_percent) — les items sans
+    opportunité rentable relégués en bas. Affichage plafonné à
+    MAX_DISPLAYED_ITEMS items (utile pour le scan de catalogue entier, qui
+    peut trouver bien plus d'opportunités qu'une sélection manuelle)."""
 
     def __init__(self, root: ctk.CTk, opportunities: list[Opportunity]):
         self.root = root
@@ -425,23 +498,31 @@ class ReportApp:
         for opportunity in opportunities:
             by_item[opportunity.item_name].append(opportunity)
 
+        sorted_items = self._sorted_by_best_profit_percent(by_item)
+        displayed_items = sorted_items[:MAX_DISPLAYED_ITEMS]
+        hidden_count = len(sorted_items) - len(displayed_items)
+
         profitable_count = sum(1 for o in opportunities if o.profit > 0)
+        header_text = (
+            f"{len(by_item)} item(s) comparé(s) — {profitable_count} opportunité(s) rentable(s)"
+            if by_item
+            else "Aucune donnée de prix exploitable pour cette sélection."
+        )
+        if hidden_count > 0:
+            header_text += f" — {len(displayed_items)} affiché(s), triés par rentabilité"
         header = ctk.CTkLabel(
             self.root,
-            text=(
-                f"{len(by_item)} item(s) comparé(s) — {profitable_count} opportunité(s) rentable(s)"
-                if by_item
-                else "Aucune donnée de prix exploitable pour cette sélection."
-            ),
+            text=header_text,
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=PALETTE["text"],
+            wraplength=680,
         )
         header.pack(fill="x", padx=12, pady=(12, 4))
 
         body = ctk.CTkScrollableFrame(self.root, fg_color=PALETTE["bg"])
         body.pack(fill="both", expand=True, padx=12, pady=4)
 
-        for item_name, item_opportunities in self._sorted_by_best_profit(by_item):
+        for item_name, item_opportunities in displayed_items:
             self._render_item_card(body, item_name, item_opportunities)
 
         ctk.CTkButton(
@@ -456,12 +537,12 @@ class ReportApp:
             command=self.root.destroy,
         ).pack(fill="x", padx=12, pady=12)
 
-    def _sorted_by_best_profit(self, by_item: dict) -> list[tuple[str, list[Opportunity]]]:
-        def best_profit(pair):
+    def _sorted_by_best_profit_percent(self, by_item: dict) -> list[tuple[str, list[Opportunity]]]:
+        def best_profit_percent(pair):
             _, item_opportunities = pair
-            return max((o.profit for o in item_opportunities), default=0)
+            return max((profit_percent(o) for o in item_opportunities), default=0)
 
-        return sorted(by_item.items(), key=best_profit, reverse=True)
+        return sorted(by_item.items(), key=best_profit_percent, reverse=True)
 
     def _render_item_card(
         self, parent: ctk.CTkFrame, item_name: str, item_opportunities: list[Opportunity]
@@ -479,7 +560,7 @@ class ReportApp:
 
         profitable = sorted(
             (o for o in item_opportunities if o.profit > 0),
-            key=lambda o: o.profit,
+            key=profit_percent,
             reverse=True,
         )
         if not profitable:
@@ -513,11 +594,18 @@ class ReportApp:
         ctk.CTkLabel(
             text_frame,
             text=(
-                f"→ Vendre sur {opportunity.sell_source} "
-                f"(net {opportunity.sell_net_price} {opportunity.currency})"
+                f"→ Lister sur {opportunity.sell_source} à "
+                f"{opportunity.sell_gross_price} {opportunity.currency}"
             ),
+            text_color=PALETTE["text"],
+            anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            text_frame,
+            text=(f"   (net {opportunity.sell_net_price} {opportunity.currency} après frais)"),
             text_color=PALETTE["text_muted"],
             anchor="w",
+            font=ctk.CTkFont(size=11),
         ).pack(fill="x")
         if not opportunity.cash_realizable:
             ctk.CTkLabel(
@@ -528,12 +616,20 @@ class ReportApp:
                 anchor="w",
             ).pack(fill="x")
 
+        profit_frame = ctk.CTkFrame(row, fg_color="transparent")
+        profit_frame.pack(side="right", padx=12)
         ctk.CTkLabel(
-            row,
+            profit_frame,
             text=f"+{opportunity.profit} {opportunity.currency}",
             font=ctk.CTkFont(size=14, weight="bold"),
             text_color=PALETTE["profit"],
-        ).pack(side="right", padx=12)
+        ).pack()
+        ctk.CTkLabel(
+            profit_frame,
+            text=f"+{profit_percent(opportunity):.1f}%",
+            font=ctk.CTkFont(size=12),
+            text_color=PALETTE["profit"],
+        ).pack()
 
 
 def show_report(opportunities: list[Opportunity]) -> None:
