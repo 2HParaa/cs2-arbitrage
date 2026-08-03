@@ -33,12 +33,14 @@ def _subtractive_net(gross_amount: Decimal, fee_rate: Decimal) -> Decimal:
 #   dont on récupère le prix dans sources/csmoney.py.
 # - Waxpeer : 5% vendeur / 0% acheteur, modèle soustractif.
 # - CS.Deals : 2% vendeur, modèle soustractif.
+# - White.market : 5% vendeur / 0% acheteur, modèle soustractif.
 FEES = {
     "steam": (Decimal("0.15"), _additive_net),
     "skinport": (Decimal("0.08"), _subtractive_net),
     "csmoney": (Decimal("0.05"), _subtractive_net),
     "waxpeer": (Decimal("0.05"), _subtractive_net),
     "csdeals": (Decimal("0.02"), _subtractive_net),
+    "whitemarket": (Decimal("0.05"), _subtractive_net),
 }
 
 
