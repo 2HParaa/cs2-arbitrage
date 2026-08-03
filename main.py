@@ -10,6 +10,7 @@ from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 from cs2_arbitrage.sources.waxpeer import WaxpeerError, WaxpeerSource
+from cs2_arbitrage.sources.whitemarket import WhiteMarketError, WhiteMarketSource
 
 # La console Windows encode stdout/stderr en cp1252 par défaut, qui ne sait
 # pas afficher certains caractères présents dans les noms d'items (ex: ★) ni
@@ -28,6 +29,7 @@ SOURCES = [
     CSMoneySource(currency="USD"),
     WaxpeerSource(),
     CSDealsSource(),
+    WhiteMarketSource(),
 ]
 
 
@@ -43,6 +45,7 @@ def collect_normalized_prices(items, sources):
                 CSMoneyError,
                 WaxpeerError,
                 CSDealsError,
+                WhiteMarketError,
             ) as error:
                 print(f"[avertissement] {error}")
                 continue
@@ -55,8 +58,8 @@ def main():
 
     if scan_max_price is not None:
         print(
-            f"Scan du catalogue Skinport/Waxpeer/CS.Deals entre {scan_min_price} "
-            f"et {scan_max_price} USD..."
+            f"Scan du catalogue Skinport/Waxpeer/CS.Deals/White.market entre "
+            f"{scan_min_price} et {scan_max_price} USD..."
         )
         opportunities = run_catalog_scan(scan_min_price, scan_max_price)
         print(generate_report(opportunities))  # trace texte en console, en plus de la fenêtre
