@@ -7,6 +7,7 @@ from cs2_arbitrage.report import generate_report
 from cs2_arbitrage.scanner import run_catalog_scan
 from cs2_arbitrage.sources.csdeals import CSDealsError, CSDealsSource
 from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
+from cs2_arbitrage.sources.marketcsgo import MarketCSGOError, MarketCSGOSource
 from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 from cs2_arbitrage.sources.waxpeer import WaxpeerError, WaxpeerSource
@@ -30,6 +31,7 @@ SOURCES = [
     WaxpeerSource(),
     CSDealsSource(),
     WhiteMarketSource(),
+    MarketCSGOSource(),
 ]
 
 
@@ -46,6 +48,7 @@ def collect_normalized_prices(items, sources):
                 WaxpeerError,
                 CSDealsError,
                 WhiteMarketError,
+                MarketCSGOError,
             ) as error:
                 print(f"[avertissement] {error}")
                 continue
@@ -58,8 +61,8 @@ def main():
 
     if scan_max_price is not None:
         print(
-            f"Scan du catalogue Skinport/Waxpeer/CS.Deals/White.market entre "
-            f"{scan_min_price} et {scan_max_price} USD..."
+            f"Scan du catalogue Skinport/Waxpeer/CS.Deals/White.market/market.csgo.com "
+            f"entre {scan_min_price} et {scan_max_price} USD..."
         )
         opportunities = run_catalog_scan(scan_min_price, scan_max_price)
         print(generate_report(opportunities))  # trace texte en console, en plus de la fenêtre
