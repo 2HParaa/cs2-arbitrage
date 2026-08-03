@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 
 from cs2_arbitrage.sources.skinport import fetch_items
 from cs2_arbitrage.sources.steam import CS2_APP_ID
@@ -30,7 +30,9 @@ from cs2_arbitrage.sources.waxpeer import fetch_items as fetch_waxpeer_items
 # (cf. fetch_icon) — c'est ce chemin de repli qui reste throttlé.
 ICON_SEARCH_URL = "https://steamcommunity.com/market/search/render/"
 ICON_BASE_URL = "https://community.akamai.steamstatic.com/economy/image"
-ICON_SIZE = 128
+# Les images brutes Waxpeer sont en 512x384 (vérifié le 2026-08-03) : 192
+# reste largement en dessous, pas de perte de netteté à l'affichage.
+ICON_SIZE = 192
 ICON_CACHE_DIR = Path(".cache/icons")
 
 THROTTLE_SECONDS = 1.5
@@ -124,10 +126,17 @@ def _fetch_icon_from_waxpeer(hash_name: str, size: int) -> bytes | None:
     except requests.RequestException:
         return None
 
+    # Les images Waxpeer ne sont pas carrées (512x384) : un simple resize
+    # vers (size, size) écraserait l'aspect ratio. On les fait plutôt tenir
+    # dans le carré (contain) puis on centre sur un canevas transparent,
+    # comme le fait déjà Steam côté serveur pour ses propres icônes.
     image = Image.open(io.BytesIO(response.content)).convert("RGBA")
-    image = image.resize((size, size), Image.LANCZOS)
+    fitted = ImageOps.contain(image, (size, size), Image.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    offset = ((size - fitted.width) // 2, (size - fitted.height) // 2)
+    canvas.paste(fitted, offset, fitted)
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
+    canvas.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
