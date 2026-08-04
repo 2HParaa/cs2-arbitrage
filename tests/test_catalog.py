@@ -11,6 +11,7 @@ from cs2_arbitrage.catalog import (
     fetch_icon,
     fetch_icon_bytes,
     icon_image_url,
+    rarity_color,
 )
 
 SKINPORT_CATALOG = [
@@ -70,9 +71,11 @@ def no_waxpeer_images_by_default(monkeypatch):
     from cs2_arbitrage import catalog
 
     catalog._waxpeer_image_index.cache_clear()
+    catalog._waxpeer_rarity_index.cache_clear()
     monkeypatch.setattr(catalog, "fetch_waxpeer_items", list)
     yield
     catalog._waxpeer_image_index.cache_clear()
+    catalog._waxpeer_rarity_index.cache_clear()
 
 
 def _mock_response(json_data=None, content=b"", status_code=200):
@@ -426,3 +429,37 @@ def test_waxpeer_image_index_is_built_only_once_across_calls(mock_get, tmp_path,
     fetch_icon("AWP | Asiimov (Field-Tested)", cache_dir=tmp_path / "icons")
 
     assert call_count["n"] == 1
+
+
+# -- rarity_color (couleurs de rareté, dump Waxpeer) ------------------------
+
+
+def test_rarity_color_returns_hex_for_known_item(monkeypatch):
+    from cs2_arbitrage import catalog
+
+    hash_name = "AK-47 | Redline (Field-Tested)"
+    monkeypatch.setattr(
+        catalog,
+        "fetch_waxpeer_items",
+        lambda: [{"name": hash_name, "rarity_color": "#d32ce6"}],
+    )
+    catalog._waxpeer_rarity_index.cache_clear()
+
+    assert rarity_color(hash_name) == "#d32ce6"
+
+
+def test_rarity_color_returns_none_for_item_absent_from_waxpeer():
+    assert rarity_color("Item inexistant") is None
+
+
+def test_rarity_color_returns_none_when_waxpeer_catalog_unavailable(monkeypatch):
+    from cs2_arbitrage import catalog
+    from cs2_arbitrage.sources.waxpeer import WaxpeerError
+
+    def _raise():
+        raise WaxpeerError("boom")
+
+    monkeypatch.setattr(catalog, "fetch_waxpeer_items", _raise)
+    catalog._waxpeer_rarity_index.cache_clear()
+
+    assert rarity_color("AK-47 | Redline (Field-Tested)") is None
