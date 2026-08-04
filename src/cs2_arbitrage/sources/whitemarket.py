@@ -1,5 +1,6 @@
 import warnings
 from decimal import Decimal
+from functools import cache
 
 import requests
 
@@ -22,9 +23,13 @@ class WhiteMarketError(Exception):
     """Erreur lors de la récupération d'un prix sur White.market."""
 
 
+@cache
 def fetch_items() -> list[dict]:
     """Catalogue complet White.market en un seul appel — réutilisé par
-    WhiteMarketSource ci-dessous."""
+    WhiteMarketSource ci-dessous et par platform_links.py pour les liens
+    directs vers les items (market_product_link). Mis en cache pour la
+    durée du process (comme sources/skinport.py) : pas question de
+    retélécharger tout le catalogue à chaque appelant."""
     response = requests.get(PRICES_URL, timeout=10)
     response.raise_for_status()
     return response.json()
