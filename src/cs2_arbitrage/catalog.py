@@ -132,6 +132,29 @@ def _waxpeer_image_index() -> dict:
     return {item["name"]: item["img"] for item in items if item.get("img")}
 
 
+@lru_cache(maxsize=1)
+def _waxpeer_rarity_index() -> dict:
+    """market_hash_name -> couleur de rareté CS2 (hex), à partir du même
+    dump Waxpeer que les icônes (champ "rarity_color", vérifié en réel le
+    2026-08-04 : ~99.5% de couverture sur ~21 600 items, valeurs cohérentes
+    avec les paliers de rareté connus du jeu — ex. #eb4b4b pour
+    Covert/couteaux/gants, #4b69ff pour Mil-Spec, #b0c3d9 pour Consumer)."""
+    try:
+        items = fetch_waxpeer_items()
+    except (requests.RequestException, WaxpeerError):
+        return {}
+    return {item["name"]: item["rarity_color"] for item in items if item.get("rarity_color")}
+
+
+def rarity_color(hash_name: str) -> str | None:
+    """Couleur de rareté (hex) pour `hash_name`, ou None si l'item est
+    absent du catalogue Waxpeer (pas actuellement en vente là-bas) ou si le
+    catalogue n'a pas pu être récupéré — à l'appelant (gui.py) de retomber
+    sur une couleur de texte neutre dans ce cas, pas de traiter ça comme
+    une erreur."""
+    return _waxpeer_rarity_index().get(hash_name)
+
+
 def _fetch_icon_from_waxpeer(hash_name: str, size: int) -> bytes | None:
     image_url = _waxpeer_image_index().get(hash_name)
     if image_url is None:
