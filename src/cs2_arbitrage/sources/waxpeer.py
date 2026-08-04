@@ -1,5 +1,6 @@
 import warnings
 from decimal import Decimal
+from functools import cache
 
 import requests
 
@@ -31,10 +32,14 @@ class WaxpeerError(Exception):
     """Erreur lors de la récupération d'un prix sur Waxpeer."""
 
 
+@cache
 def fetch_items() -> list[dict]:
     """Catalogue complet Waxpeer (items actuellement en vente) en un seul
-    appel — réutilisé par WaxpeerSource ci-dessous et par catalog.py pour
-    les icônes."""
+    appel — réutilisé par WaxpeerSource ci-dessous, par catalog.py pour les
+    icônes, et par platform_links.py pour les liens directs vers les
+    items. Mis en cache pour la durée du process (comme sources/
+    skinport.py) : ces appelants convergent tous vers le même catalogue,
+    pas question de le retélécharger (~5 Mo) à chaque appelant."""
     response = requests.get(PRICES_URL, params={"game": CS2_GAME}, timeout=10)
     response.raise_for_status()
     data = response.json()

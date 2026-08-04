@@ -26,6 +26,25 @@ class CSMoneyError(Exception):
     """Erreur lors de la récupération d'un prix sur CS.Money."""
 
 
+def build_slug(item_name: str) -> str:
+    # Ex: "StatTrak™ AK-47 | Redline (Field-Tested)"
+    #     -> "stattrak-ak-47-redline-field-tested"
+    #     "★ Karambit | Doppler (Factory New)"
+    #     -> "karambit-doppler-factory-new"
+    # Vérifié en réel contre le vrai catalogue CS.Money (armes, couteaux
+    # StatTrak/★, caisses). Fonction autonome (pas une méthode) : réutilisée
+    # telle quelle par platform_links.py pour construire un lien cliquable,
+    # sans dépendre d'une instance CSMoneySource.
+    name = item_name
+    is_stattrak = name.startswith("StatTrak™ ")
+    if is_stattrak:
+        name = name[len("StatTrak™ ") :]
+    name = name.replace("★ ", "")
+    name = re.sub(r"[|()]", " ", name)
+    slug = "-".join(name.lower().split())
+    return f"stattrak-{slug}" if is_stattrak else slug
+
+
 class CSMoneySource(PriceSource):
     def __init__(self, currency: str = "EUR"):
         self._currency = currency
@@ -54,20 +73,7 @@ class CSMoneySource(PriceSource):
         return Price(item_name=item_name, amount=amount, currency=self._currency, source=self.name)
 
     def _to_slug(self, item_name: str) -> str:
-        # Ex: "StatTrak™ AK-47 | Redline (Field-Tested)"
-        #     -> "stattrak-ak-47-redline-field-tested"
-        #     "★ Karambit | Doppler (Factory New)"
-        #     -> "karambit-doppler-factory-new"
-        # Vérifié en réel contre le vrai catalogue CS.Money (armes, couteaux
-        # StatTrak/★, caisses).
-        name = item_name
-        is_stattrak = name.startswith("StatTrak™ ")
-        if is_stattrak:
-            name = name[len("StatTrak™ ") :]
-        name = name.replace("★ ", "")
-        name = re.sub(r"[|()]", " ", name)
-        slug = "-".join(name.lower().split())
-        return f"stattrak-{slug}" if is_stattrak else slug
+        return build_slug(item_name)
 
     def _fetch(self, slug: str) -> str:
         url = f"{BASE_URL}/{self._locale}/csgo/{slug}/"

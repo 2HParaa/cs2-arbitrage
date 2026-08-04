@@ -2,6 +2,7 @@ import io
 import queue
 import threading
 import tkinter as tk
+import webbrowser
 from decimal import ROUND_HALF_UP, Decimal
 
 import customtkinter as ctk
@@ -11,6 +12,7 @@ from PIL import Image
 from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
 from cs2_arbitrage.compare import Opportunity, profit_percent
 from cs2_arbitrage.exchange_rate import ExchangeRateError, fetch_usd_to_eur_rate
+from cs2_arbitrage.platform_links import build_item_url
 from cs2_arbitrage.scanner import SCAN_CATEGORY_LABELS
 from cs2_arbitrage.sources.skinport import SkinportError, fetch_recent_sales_volume
 
@@ -998,18 +1000,22 @@ class ReportApp:
 
         text_frame = ctk.CTkFrame(row, fg_color="transparent")
         text_frame.pack(side="left", fill="x", expand=True, padx=10, pady=8)
-        ctk.CTkLabel(
+        self._render_platform_line(
             text_frame,
             text=f"Acheter sur {opportunity.buy_source} ({buy_amount} {currency})",
+            source=opportunity.buy_source,
+            item_name=opportunity.item_name,
             text_color=PALETTE["text"],
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
+            font=ctk.CTkFont(),
+        )
+        self._render_platform_line(
             text_frame,
             text=f"→ Lister sur {opportunity.sell_source} à {sell_gross_amount} {currency}",
+            source=opportunity.sell_source,
+            item_name=opportunity.item_name,
             text_color=PALETTE["text"],
-            anchor="w",
-        ).pack(fill="x")
+            font=ctk.CTkFont(),
+        )
         ctk.CTkLabel(
             text_frame,
             text=f"   (net {sell_net_amount} {currency} après frais)",
@@ -1025,6 +1031,42 @@ class ReportApp:
                 font=ctk.CTkFont(size=11),
                 anchor="w",
             ).pack(fill="x")
+
+    def _render_platform_line(
+        self,
+        parent: ctk.CTkFrame,
+        text: str,
+        source: str,
+        item_name: str,
+        text_color: str,
+        font: ctk.CTkFont,
+    ) -> None:
+        # Bouton "↗" qui ouvre la page de l'item sur la plateforme
+        # (platform_links.build_item_url) dans le navigateur par défaut —
+        # accélère l'exécution MANUELLE du trade, jamais un ordre placé
+        # depuis le code (décision utilisateur du 2026-08-04). Absent si
+        # aucun lien n'a pu être construit (item introuvable dans le
+        # catalogue de la plateforme, réseau indisponible...) plutôt que
+        # d'afficher un bouton mort.
+        line = ctk.CTkFrame(parent, fg_color="transparent")
+        line.pack(fill="x")
+        ctk.CTkLabel(line, text=text, text_color=text_color, font=font, anchor="w").pack(
+            side="left", fill="x", expand=True
+        )
+        url = build_item_url(source, item_name)
+        if url:
+            ctk.CTkButton(
+                line,
+                text="↗",
+                width=22,
+                height=18,
+                corner_radius=4,
+                fg_color="transparent",
+                hover_color=PALETTE["surface_hover"],
+                text_color=PALETTE["accent"],
+                font=ctk.CTkFont(size=11),
+                command=lambda: webbrowser.open(url),
+            ).pack(side="right", padx=(4, 0))
 
     # -- Chargement des icônes en arrière-plan ---------------------------
 
