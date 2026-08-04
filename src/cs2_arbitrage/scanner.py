@@ -1,12 +1,14 @@
 from decimal import Decimal
 from urllib.parse import urlparse
 
-from cs2_arbitrage.compare import Opportunity, compare
+from cs2_arbitrage.compare import Opportunity, compare, profit_percent
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.sources.base import MIN_VOLUME_FOR_CONFIDENCE, Price
 from cs2_arbitrage.sources.csdeals import fetch_items as fetch_csdeals_items
+from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.marketcsgo import fetch_items as fetch_marketcsgo_items
 from cs2_arbitrage.sources.skinport import fetch_items as fetch_skinport_items
+from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
 from cs2_arbitrage.sources.waxpeer import fetch_items as fetch_waxpeer_items
 from cs2_arbitrage.sources.whitemarket import fetch_items as fetch_whitemarket_items
 
@@ -158,6 +160,12 @@ def fetch_scan_prices(
     return prices
 
 
+def _opportunities_from_prices(prices: list[Price]) -> list[Opportunity]:
+    normalized_prices = [normalize(price) for price in prices]
+    opportunities = compare(normalized_prices)
+    return [opportunity for opportunity in opportunities if opportunity.profit > 0]
+
+
 def run_catalog_scan(
     min_price: Decimal, max_price: Decimal, categories: set[str] | None = None
 ) -> list[Opportunity]:
@@ -168,6 +176,80 @@ def run_catalog_scan(
     items sans opportunité qu'il a choisis exprès, un scan large n'a
     d'intérêt que pour les vraies trouvailles."""
     prices = fetch_scan_prices(min_price, max_price, categories)
-    normalized_prices = [normalize(price) for price in prices]
-    opportunities = compare(normalized_prices)
-    return [opportunity for opportunity in opportunities if opportunity.profit > 0]
+    return _opportunities_from_prices(prices)
+
+
+# Steam et CS.Money sont throttlés (1.5s / 0.7s entre requêtes) donc exclus
+# du scan complet (cf. plus haut, "des heures sur ~25 000 items"), mais un
+# scan les ignore alors totalement, même pour ses meilleurs candidats —
+# alors qu'interroger une trentaine d'items un par un, au lieu de tout le
+# catalogue, reste rapide (~1 minute) et sans risque de rate-limit. Ajouté
+# le 2026-08-04 suite à une question utilisateur en ce sens. Volontairement
+# plus large que TOP_TRADES_COUNT (10, gui.py) : un item peut grimper dans
+# le top 10 final GRÂCE à un meilleur prix Steam/CS.Money (ex: un meilleur
+# prix de vente sur Steam qui ferait grimper un item classé 15e sans lui),
+# donc le classement doit être recalculé une fois ces deux sources
+# ajoutées, pas seulement recalculé sur les 10 déjà en tête sans elles.
+ENRICH_CANDIDATE_COUNT = 30
+
+THROTTLED_ENRICHMENT_SOURCES = [
+    SteamMarketSource(currency="USD"),
+    CSMoneySource(currency="USD"),
+]
+
+
+def _top_candidate_item_names(opportunities: list[Opportunity], count: int) -> list[str]:
+    best_profit_percent: dict[str, Decimal] = {}
+    for opportunity in opportunities:
+        percent = profit_percent(opportunity)
+        current = best_profit_percent.get(opportunity.item_name)
+        if current is None or percent > current:
+            best_profit_percent[opportunity.item_name] = percent
+    ranked = sorted(best_profit_percent, key=best_profit_percent.get, reverse=True)
+    return ranked[:count]
+
+
+def enrich_top_opportunities(
+    prices: list[Price],
+    opportunities: list[Opportunity],
+    candidate_count: int = ENRICH_CANDIDATE_COUNT,
+) -> list[Opportunity]:
+    """Recalcule les opportunités des `candidate_count` meilleurs items du
+    scan (par profit relatif, cf. _top_candidate_item_names) en y ajoutant
+    Steam et CS.Money, les deux seules sources absentes du scan complet.
+    Les opportunités des items hors de ce top ne sont pas modifiées."""
+    candidate_names = set(_top_candidate_item_names(opportunities, candidate_count))
+    if not candidate_names:
+        return opportunities
+
+    print(
+        f"Enrichissement des {len(candidate_names)} meilleurs candidats avec Steam et "
+        f"CS.Money (throttlé, ~1 minute)..."
+    )
+    candidate_prices = [price for price in prices if price.item_name in candidate_names]
+    for source in THROTTLED_ENRICHMENT_SOURCES:
+        for item_name in candidate_names:
+            try:
+                candidate_prices.append(source.get_price(item_name))
+            except (SteamMarketError, CSMoneyError) as error:
+                print(f"[avertissement] {error}")
+
+    enriched_candidate_opportunities = _opportunities_from_prices(candidate_prices)
+    unaffected_opportunities = [
+        opportunity for opportunity in opportunities if opportunity.item_name not in candidate_names
+    ]
+    return unaffected_opportunities + enriched_candidate_opportunities
+
+
+def scan_and_enrich_catalog(
+    min_price: Decimal,
+    max_price: Decimal,
+    categories: set[str] | None = None,
+    candidate_count: int = ENRICH_CANDIDATE_COUNT,
+) -> list[Opportunity]:
+    """Point d'entrée utilisé par main.py pour le flux "scan catalogue" :
+    scan complet (run_catalog_scan) puis enrichissement Steam/CS.Money des
+    meilleurs candidats (cf. enrich_top_opportunities)."""
+    prices = fetch_scan_prices(min_price, max_price, categories)
+    opportunities = _opportunities_from_prices(prices)
+    return enrich_top_opportunities(prices, opportunities, candidate_count)
