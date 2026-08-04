@@ -9,9 +9,10 @@ import customtkinter as ctk
 import requests
 from PIL import Image
 
-from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
+from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon, rarity_color
 from cs2_arbitrage.compare import Opportunity, profit_percent
 from cs2_arbitrage.exchange_rate import ExchangeRateError, fetch_usd_to_eur_rate
+from cs2_arbitrage.fonts import ITEM_NAME_FONT_FAMILY, register_fonts
 from cs2_arbitrage.platform_links import build_item_url
 from cs2_arbitrage.scanner import SCAN_CATEGORY_LABELS
 from cs2_arbitrage.sources.skinport import SkinportError, fetch_recent_sales_volume
@@ -95,6 +96,22 @@ ctk.set_default_color_theme("dark-blue")
 # ci-dessous (vérifié en lisant scaling_tracker.py : la boucle elle-même
 # n'est pas conditionnée par ce flag, seul le calcul DPI l'est).
 ctk.deactivate_automatic_dpi_awareness()
+register_fonts()
+
+
+def _item_font(size: int = 13, weight: str = "normal") -> ctk.CTkFont:
+    # Police dédiée pour tous les noms d'items (skins/variantes), cf.
+    # fonts.py pour le choix de Noto Sans comme alternative à Motiva Sans.
+    # Le reste de l'interface (boutons, libellés génériques) garde la
+    # police par défaut de customtkinter, volontairement pas touchée.
+    return ctk.CTkFont(family=ITEM_NAME_FONT_FAMILY, size=size, weight=weight)
+
+
+def _item_text_color(hash_name: str) -> str:
+    # Couleurs de rareté CS2 classiques (cf. catalog.rarity_color, sourcé
+    # depuis Waxpeer) ; repli sur la couleur de texte neutre du thème pour
+    # les ~0.5% d'items sans couleur connue plutôt que de ne rien afficher.
+    return rarity_color(hash_name) or PALETTE["text"]
 
 
 def _install_benign_tcl_error_filter(root: ctk.CTk) -> None:
@@ -586,7 +603,8 @@ class ItemBrowserApp:
                 corner_radius=8,
                 fg_color=PALETTE["surface"],
                 hover_color=PALETTE["surface_hover"],
-                text_color=PALETTE["text"],
+                text_color=_item_text_color(entry.representative_hash_name),
+                font=_item_font(),
                 command=lambda e=entry: self._enter_skin(e),
             ).pack(side="left", fill="x", expand=True)
             hash_names.append(entry.representative_hash_name)
@@ -615,7 +633,8 @@ class ItemBrowserApp:
                 fg_color=PALETTE["accent"],
                 hover_color=PALETTE["accent_hover"],
                 checkmark_color=PALETTE["accent_text"],
-                text_color=PALETTE["text"],
+                text_color=_item_text_color(hash_name),
+                font=_item_font(),
                 command=lambda h=hash_name, v=variable: self._toggle_item(h, v),
             ).pack(fill="x", pady=2)
 
@@ -645,7 +664,8 @@ class ItemBrowserApp:
                 fg_color=PALETTE["accent"],
                 hover_color=PALETTE["accent_hover"],
                 checkmark_color=PALETTE["accent_text"],
-                text_color=PALETTE["text"],
+                text_color=_item_text_color(hash_name),
+                font=_item_font(),
                 command=lambda h=hash_name, v=variable: self._toggle_item(h, v),
             ).pack(side="left", fill="x", expand=True)
             icon_labels.append(icon_label)
@@ -724,9 +744,13 @@ class ItemBrowserApp:
         for hash_name in sorted(self.selected_items):
             row = ctk.CTkFrame(self.selected_frame, fg_color="transparent")
             row.pack(fill="x", pady=1)
-            ctk.CTkLabel(row, text=hash_name, text_color=PALETTE["text"], anchor="w").pack(
-                side="left", fill="x", expand=True
-            )
+            ctk.CTkLabel(
+                row,
+                text=hash_name,
+                text_color=_item_text_color(hash_name),
+                font=_item_font(),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
             ctk.CTkButton(
                 row,
                 text="✕",
@@ -951,8 +975,8 @@ class ReportApp:
         ctk.CTkLabel(
             header_row,
             text=opportunity.item_name,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=PALETTE["text"],
+            font=_item_font(size=13, weight="bold"),
+            text_color=_item_text_color(opportunity.item_name),
             anchor="w",
         ).pack(side="left", fill="x", expand=True)
 
