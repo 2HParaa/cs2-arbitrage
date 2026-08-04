@@ -5,12 +5,14 @@ import tkinter as tk
 from decimal import ROUND_HALF_UP, Decimal
 
 import customtkinter as ctk
+import requests
 from PIL import Image
 
 from cs2_arbitrage.catalog import CatalogError, ItemCatalog, fetch_icon
 from cs2_arbitrage.compare import Opportunity, profit_percent
 from cs2_arbitrage.exchange_rate import ExchangeRateError, fetch_usd_to_eur_rate
 from cs2_arbitrage.scanner import SCAN_CATEGORY_LABELS
+from cs2_arbitrage.sources.skinport import SkinportError, fetch_recent_sales_volume
 
 STEAM_WALLET_WARNING = "Steam Wallet uniquement, non retirable en cash"
 CENT = Decimal("0.01")
@@ -34,6 +36,20 @@ SEARCH_SUGGESTIONS_LIMIT = 8
 # lente à s'ouvrir (constaté en réel) pour un intérêt limité au-delà des
 # toutes meilleures affaires.
 TOP_TRADES_COUNT = 10
+# Curseur de liquidité dans le rapport (ReportApp) : nombre minimum de
+# ventes RÉELLEMENT CONCLUES sur Skinport (endpoint /v1/sales/history) sur
+# les 7 DERNIERS JOURS — fenêtre fixe, pas ajustable, moins bruitée que
+# 24h — pour qu'un item soit gardé dans le top 10, peu importe la
+# plateforme réelle du trade. Repéré le 2026-08-04 : une grosse part des
+# trades les plus rentables ont CS.Deals comme plateforme de vente, qui
+# n'expose aucun vrai indicateur de ventes exploitable en masse — Skinport
+# sert donc de proxy de liquidité cross-plateforme. Ajustable en direct
+# (curseur) plutôt qu'une constante figée : toutes les données sont déjà
+# en mémoire au moment d'afficher le rapport, pas besoin de relancer la
+# comparaison pour changer le seuil.
+LIQUIDITY_SLIDER_MIN = 0
+LIQUIDITY_SLIDER_MAX = 50
+LIQUIDITY_SLIDER_DEFAULT = 14
 
 # Scan "tout le catalogue entre $X et $Y" : limité à Skinport/Waxpeer/
 # CS.Deals (cf. scanner.py), Skinport servant de référence pour les deux
@@ -131,6 +147,17 @@ def _fetch_display_rate() -> Decimal | None:
         return fetch_usd_to_eur_rate()
     except ExchangeRateError:
         return None
+
+
+def _fetch_sales_volume_7d() -> dict[str, int]:
+    # dict vide si l'historique de ventes Skinport est indisponible
+    # (réseau, 429...) : le filtre de liquidité traite alors tout comme
+    # "volume inconnu" et n'exclut rien, plutôt que de faire planter tout
+    # le rapport pour un signal secondaire.
+    try:
+        return fetch_recent_sales_volume()
+    except (requests.RequestException, SkinportError):
+        return {}
 
 
 def _to_display_currency(amount: Decimal, rate: Decimal | None) -> tuple[Decimal, str]:
@@ -772,41 +799,33 @@ class ReportApp:
 
     def __init__(self, root: ctk.CTk, opportunities: list[Opportunity]):
         self.root = root
+        self.opportunities = opportunities
         self.eur_rate = _fetch_display_rate()
+        self.sales_volume_7d = _fetch_sales_volume_7d()
+        self.liquidity_threshold = LIQUIDITY_SLIDER_DEFAULT
         self.icon_cache: dict[str, Image.Image] = {}
         self.placeholder_image = Image.new("RGBA", (8, 8), PALETTE["surface_alt"])
+        self.render_generation = 0
         self.root.title("CS2 Arbitrage — Résultats")
         self.root.geometry("720x700")
         self.root.minsize(600, 560)
         self.root.configure(fg_color=PALETTE["bg"])
 
-        compared_items_count = len({o.item_name for o in opportunities})
-        best_trades = self._best_trade_per_item(opportunities)
-        top_trades = best_trades[:TOP_TRADES_COUNT]
-
-        header_text = (
-            f"{compared_items_count} item(s) comparé(s) — top {len(top_trades)} "
-            f"trade(s) le(s) plus rentable(s)"
-            if top_trades
-            else "Aucune opportunité rentable pour cette sélection."
-        )
-        header = ctk.CTkLabel(
+        self.header_label = ctk.CTkLabel(
             self.root,
-            text=header_text,
+            text="",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=PALETTE["text"],
             wraplength=680,
         )
-        header.pack(fill="x", padx=12, pady=(12, 4))
+        self.header_label.pack(fill="x", padx=12, pady=(12, 4))
 
-        body = ctk.CTkScrollableFrame(self.root, fg_color=PALETTE["bg"])
-        body.pack(fill="both", expand=True, padx=12, pady=4)
+        self._build_liquidity_slider()
 
-        icon_labels = []
-        for opportunity in top_trades:
-            icon_label = self._render_item_card(body, opportunity)
-            icon_labels.append((opportunity.item_name, icon_label))
-        self._load_icons_async(icon_labels)
+        self.body = ctk.CTkScrollableFrame(self.root, fg_color=PALETTE["bg"])
+        self.body.pack(fill="both", expand=True, padx=12, pady=4)
+
+        self._render_trades()
 
         ctk.CTkButton(
             self.root,
@@ -820,15 +839,97 @@ class ReportApp:
             command=self.root.destroy,
         ).pack(fill="x", padx=12, pady=12)
 
+    def _build_liquidity_slider(self) -> None:
+        # Réglable en direct plutôt qu'une constante figée : opportunities
+        # et sales_volume_7d sont déjà en mémoire, pas besoin de relancer
+        # la comparaison/le scan pour changer le seuil (cf.
+        # LIQUIDITY_SLIDER_DEFAULT). Désactivé à 0 (aucun item exclu).
+        panel = ctk.CTkFrame(self.root, fg_color=PALETTE["surface"], corner_radius=10)
+        panel.pack(fill="x", padx=12, pady=(0, 4))
+
+        label_row = ctk.CTkFrame(panel, fg_color="transparent")
+        label_row.pack(fill="x", padx=12, pady=(8, 0))
+        ctk.CTkLabel(
+            label_row,
+            text="Liquidité minimum (ventes Skinport / 7 jours) :",
+            text_color=PALETTE["text_muted"],
+        ).pack(side="left")
+        self.liquidity_value_label = ctk.CTkLabel(
+            label_row,
+            text=self._format_liquidity_threshold(LIQUIDITY_SLIDER_DEFAULT),
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=PALETTE["accent"],
+        )
+        self.liquidity_value_label.pack(side="right")
+
+        self.liquidity_slider = ctk.CTkSlider(
+            panel,
+            from_=LIQUIDITY_SLIDER_MIN,
+            to=LIQUIDITY_SLIDER_MAX,
+            number_of_steps=LIQUIDITY_SLIDER_MAX - LIQUIDITY_SLIDER_MIN,
+            fg_color=PALETTE["surface_alt"],
+            progress_color=PALETTE["accent"],
+            button_color=PALETTE["accent"],
+            button_hover_color=PALETTE["accent_hover"],
+            command=self._on_liquidity_slider_change,
+        )
+        self.liquidity_slider.set(LIQUIDITY_SLIDER_DEFAULT)
+        self.liquidity_slider.pack(fill="x", padx=12, pady=(4, 10))
+
+    def _format_liquidity_threshold(self, value: float) -> str:
+        threshold = round(value)
+        return "désactivé" if threshold == 0 else f"≥ {threshold} ventes/7j"
+
+    def _on_liquidity_slider_change(self, value: float) -> None:
+        self.liquidity_threshold = round(value)
+        self.liquidity_value_label.configure(text=self._format_liquidity_threshold(value))
+        self._render_trades()
+
+    def _render_trades(self) -> None:
+        self.render_generation += 1
+        generation = self.render_generation
+        for widget in self.body.winfo_children():
+            widget.destroy()
+
+        compared_items_count = len({o.item_name for o in self.opportunities})
+        best_trades = self._best_trade_per_item(self.opportunities)
+        top_trades = best_trades[:TOP_TRADES_COUNT]
+
+        header_text = (
+            f"{compared_items_count} item(s) comparé(s) — top {len(top_trades)} "
+            f"trade(s) le(s) plus rentable(s)"
+            if top_trades
+            else "Aucune opportunité rentable (ou seuil de liquidité trop élevé) pour cette sélection."
+        )
+        self.header_label.configure(text=header_text)
+
+        icon_labels = []
+        for opportunity in top_trades:
+            icon_label = self._render_item_card(self.body, opportunity)
+            icon_labels.append((opportunity.item_name, icon_label))
+        self._load_icons_async(icon_labels, generation)
+
     def _best_trade_per_item(self, opportunities: list[Opportunity]) -> list[Opportunity]:
         """Le meilleur trade rentable (profit relatif décroissant) pour
         chaque item, un seul par item — les items sans trade rentable ne
         sont pas représentés du tout, contrairement à l'ancien
         comportement qui les affichait quand même avec "Aucune opportunité
-        rentable"."""
+        rentable". Écarte aussi les items sous le seuil de liquidité
+        courant (self.liquidity_threshold, cf. _build_liquidity_slider) :
+        un spread de prix ne veut rien dire si personne n'achète ce skin
+        en ce moment, peu importe la plateforme réelle du trade. Filtre
+        désactivé (rien exclu) si sales_volume_7d est vide, càd si
+        l'historique de ventes Skinport n'a pas pu être récupéré : un
+        signal secondaire indisponible ne doit pas vider tout le rapport."""
+        liquidity_known = bool(self.sales_volume_7d)
         best_by_item: dict[str, Opportunity] = {}
         for opportunity in opportunities:
             if opportunity.profit <= 0:
+                continue
+            if (
+                liquidity_known
+                and self.sales_volume_7d.get(opportunity.item_name, 0) < self.liquidity_threshold
+            ):
                 continue
             current_best = best_by_item.get(opportunity.item_name)
             if current_best is None or profit_percent(opportunity) > profit_percent(current_best):
@@ -927,12 +1028,17 @@ class ReportApp:
 
     # -- Chargement des icônes en arrière-plan ---------------------------
 
-    def _load_icons_async(self, icon_labels: list[tuple[str, ctk.CTkLabel]]) -> None:
+    def _load_icons_async(
+        self, icon_labels: list[tuple[str, ctk.CTkLabel]], generation: int
+    ) -> None:
         # Même principe que ItemBrowserApp._load_icons_async : le thread ne
         # touche aucun widget (pas thread-safe), il résout juste les octets
         # (fetch_icon, Waxpeer sans throttle puis repli Steam, cache disque
         # inclus) et les dépose dans la queue ; la création des CTkImage et
         # l'affichage se font côté thread principal via _poll_icon_queue.
+        # generation (cf. render_generation) invalide les résultats d'un
+        # chargement précédent si le curseur de liquidité a été rebougé
+        # entre-temps (_render_trades peut être appelé plusieurs fois).
         work_queue: queue.Queue = queue.Queue()
 
         def worker():
@@ -948,13 +1054,18 @@ class ReportApp:
             work_queue.put(None)
 
         threading.Thread(target=worker, daemon=True).start()
-        self._poll_icon_queue(work_queue, icon_labels)
+        self._poll_icon_queue(work_queue, icon_labels, generation)
 
     def _poll_icon_queue(
-        self, work_queue: "queue.Queue", icon_labels: list[tuple[str, ctk.CTkLabel]]
+        self,
+        work_queue: "queue.Queue",
+        icon_labels: list[tuple[str, ctk.CTkLabel]],
+        generation: int,
     ) -> None:
         if not self.root.winfo_exists():
             return  # la fenêtre a été fermée pendant le chargement
+        if generation != self.render_generation:
+            return  # le curseur de liquidité a rebougé, ces résultats ne servent plus
 
         try:
             while True:
@@ -970,7 +1081,9 @@ class ReportApp:
         except queue.Empty:
             pass
 
-        self.root.after(ICON_POLL_INTERVAL_MS, self._poll_icon_queue, work_queue, icon_labels)
+        self.root.after(
+            ICON_POLL_INTERVAL_MS, self._poll_icon_queue, work_queue, icon_labels, generation
+        )
 
 
 def show_report(opportunities: list[Opportunity]) -> None:
