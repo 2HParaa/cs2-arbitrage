@@ -1,7 +1,14 @@
 from decimal import Decimal
 from unittest.mock import patch
 
-from cs2_arbitrage.scanner import fetch_scan_prices, run_catalog_scan
+from cs2_arbitrage.compare import Opportunity
+from cs2_arbitrage.scanner import (
+    enrich_top_opportunities,
+    fetch_scan_prices,
+    run_catalog_scan,
+)
+from cs2_arbitrage.sources.base import Price
+from cs2_arbitrage.sources.steam import SteamMarketError
 
 SKINPORT_ITEMS = [
     {"market_hash_name": "Cheap Sticker", "min_price": 2.0, "quantity": 50},
@@ -335,3 +342,107 @@ def test_fetch_scan_prices_no_category_filter_by_default(
     prices = fetch_scan_prices(Decimal(0), Decimal(5))
 
     assert {price.item_name for price in prices} == {"Cheap Sticker"}
+
+
+# -- enrich_top_opportunities (Steam/CS.Money sur les meilleurs candidats) --
+
+
+def _make_price(item_name, amount, source, currency="USD"):
+    return Price(item_name=item_name, amount=Decimal(str(amount)), currency=currency, source=source)
+
+
+def _make_opportunity(item_name, profit, buy_source="skinport", sell_source="csdeals"):
+    buy_price = Decimal("2.0")
+    sell_net = buy_price + profit
+    return Opportunity(
+        item_name=item_name,
+        currency="USD",
+        buy_source=buy_source,
+        sell_source=sell_source,
+        buy_price=buy_price,
+        sell_gross_price=sell_net,
+        sell_net_price=sell_net,
+        profit=profit,
+        cash_realizable=True,
+    )
+
+
+@patch("cs2_arbitrage.scanner.CSMoneySource.get_price")
+@patch("cs2_arbitrage.scanner.SteamMarketSource.get_price")
+def test_enrich_top_opportunities_adds_steam_and_csmoney_for_candidates(mock_steam, mock_csmoney):
+    mock_steam.return_value = _make_price("Item", "2.8", "steam")
+    mock_csmoney.return_value = _make_price("Item", "2.5", "csmoney")
+
+    prices = [_make_price("Item", "2.0", "skinport")]
+    opportunities = [_make_opportunity("Item", Decimal("0.5"))]
+
+    enriched = enrich_top_opportunities(prices, opportunities, candidate_count=10)
+
+    sources = {o.sell_source for o in enriched} | {o.buy_source for o in enriched}
+    assert "steam" in sources
+    assert "csmoney" in sources
+
+
+@patch("cs2_arbitrage.scanner.CSMoneySource.get_price")
+@patch("cs2_arbitrage.scanner.SteamMarketSource.get_price")
+def test_enrich_top_opportunities_limits_to_candidate_count(mock_steam, mock_csmoney):
+    mock_steam.side_effect = lambda name: _make_price(name, "2.8", "steam")
+    mock_csmoney.side_effect = lambda name: _make_price(name, "2.5", "csmoney")
+
+    prices = [
+        _make_price("Best Item", "2.0", "skinport"),
+        _make_price("Worst Item", "2.0", "skinport"),
+    ]
+    opportunities = [
+        _make_opportunity("Best Item", Decimal("1.0")),  # +50%
+        _make_opportunity("Worst Item", Decimal("0.1")),  # +5%
+    ]
+
+    enrich_top_opportunities(prices, opportunities, candidate_count=1)
+
+    mock_steam.assert_called_once_with("Best Item")
+    mock_csmoney.assert_called_once_with("Best Item")
+
+
+@patch("cs2_arbitrage.scanner.CSMoneySource.get_price")
+@patch("cs2_arbitrage.scanner.SteamMarketSource.get_price")
+def test_enrich_top_opportunities_handles_steam_error_gracefully(mock_steam, mock_csmoney):
+    mock_steam.side_effect = SteamMarketError("boom")
+    mock_csmoney.return_value = _make_price("Item", "2.5", "csmoney")
+
+    prices = [_make_price("Item", "2.0", "skinport")]
+    opportunities = [_make_opportunity("Item", Decimal("0.5"))]
+
+    enriched = enrich_top_opportunities(prices, opportunities, candidate_count=10)
+
+    sources = {o.sell_source for o in enriched} | {o.buy_source for o in enriched}
+    assert "steam" not in sources
+    assert "csmoney" in sources
+
+
+@patch("cs2_arbitrage.scanner.CSMoneySource.get_price")
+@patch("cs2_arbitrage.scanner.SteamMarketSource.get_price")
+def test_enrich_top_opportunities_leaves_non_candidates_untouched(mock_steam, mock_csmoney):
+    mock_steam.side_effect = lambda name: _make_price(name, "2.8", "steam")
+    mock_csmoney.side_effect = lambda name: _make_price(name, "2.5", "csmoney")
+
+    prices = [
+        _make_price("Best Item", "2.0", "skinport"),
+        _make_price("Worst Item", "2.0", "skinport"),
+    ]
+    best = _make_opportunity("Best Item", Decimal("1.0"))
+    worst = _make_opportunity("Worst Item", Decimal("0.1"))
+
+    enriched = enrich_top_opportunities(prices, [best, worst], candidate_count=1)
+
+    assert worst in enriched
+
+
+@patch("cs2_arbitrage.scanner.CSMoneySource.get_price")
+@patch("cs2_arbitrage.scanner.SteamMarketSource.get_price")
+def test_enrich_top_opportunities_noop_when_no_opportunities(mock_steam, mock_csmoney):
+    result = enrich_top_opportunities([], [], candidate_count=30)
+
+    assert result == []
+    mock_steam.assert_not_called()
+    mock_csmoney.assert_not_called()
