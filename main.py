@@ -4,7 +4,7 @@ from cs2_arbitrage.compare import compare
 from cs2_arbitrage.gui import run_item_browser, show_report
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.report import generate_report
-from cs2_arbitrage.scanner import run_catalog_scan
+from cs2_arbitrage.scanner import scan_and_enrich_catalog
 from cs2_arbitrage.sources.csdeals import CSDealsError, CSDealsSource
 from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
 from cs2_arbitrage.sources.marketcsgo import MarketCSGOError, MarketCSGOSource
@@ -65,7 +65,7 @@ def main():
             f"entre {scan_min_price} et {scan_max_price} USD "
             f"({len(scan_categories)} catégorie(s) incluse(s))..."
         )
-        opportunities = run_catalog_scan(scan_min_price, scan_max_price, scan_categories)
+        opportunities = scan_and_enrich_catalog(scan_min_price, scan_max_price, scan_categories)
         print(generate_report(opportunities))  # trace texte en console, en plus de la fenêtre
         show_report(opportunities)
         return
