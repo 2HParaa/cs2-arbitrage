@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import requests
 
-from cs2_arbitrage.sources.base import MIN_VOLUME_FOR_CONFIDENCE, Price, PriceSource
+from cs2_arbitrage.sources.base import MIN_SALES_VOLUME_FOR_CONFIDENCE, Price, PriceSource
 
 CS2_APP_ID = 730
 PRICE_OVERVIEW_URL = "https://steamcommunity.com/market/priceoverview/"
@@ -46,14 +46,19 @@ class SteamMarketSource(PriceSource):
 
         # "volume" = nombre de ventes sur les dernières 24h (pas le nombre
         # d'offres actives). En dessous du seuil, le prix repose sur trop peu
-        # de transactions récentes pour être fiable.
+        # de transactions récentes pour être fiable. Seuil dédié aux vraies
+        # ventes (MIN_SALES_VOLUME_FOR_CONFIDENCE), pas MIN_VOLUME_FOR_CONFIDENCE
+        # (offres actives, une grandeur différente) — cf. sources/base.py.
         volume = data.get("volume")
         # "volume" peut contenir une virgule comme séparateur de milliers
         # (ex: "2,123"), à retirer avant conversion en entier.
-        if volume is not None and int(str(volume).replace(",", "")) < MIN_VOLUME_FOR_CONFIDENCE:
+        if (
+            volume is not None
+            and int(str(volume).replace(",", "")) < MIN_SALES_VOLUME_FOR_CONFIDENCE
+        ):
             warnings.warn(
                 f"Volume faible sur Steam pour '{item_name}' ({volume} ventes/24h, "
-                f"seuil de confiance : {MIN_VOLUME_FOR_CONFIDENCE}) — prix potentiellement peu fiable"
+                f"seuil de confiance : {MIN_SALES_VOLUME_FOR_CONFIDENCE}) — prix potentiellement peu fiable"
             )
 
         amount = self._parse_amount(data["lowest_price"])
