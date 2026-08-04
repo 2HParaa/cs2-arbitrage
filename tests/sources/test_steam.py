@@ -118,7 +118,7 @@ def test_get_price_raises_when_no_active_listing(mock_get):
 
 @patch("cs2_arbitrage.sources.steam.requests.get")
 def test_get_price_warns_on_low_volume(mock_get):
-    mock_get.return_value = _mock_get({"success": True, "lowest_price": "12,34€", "volume": "3"})
+    mock_get.return_value = _mock_get({"success": True, "lowest_price": "12,34€", "volume": "1"})
 
     source = SteamMarketSource(currency="EUR")
 
@@ -131,6 +131,18 @@ def test_get_price_warns_on_low_volume(mock_get):
 @patch("cs2_arbitrage.sources.steam.requests.get")
 def test_get_price_does_not_warn_on_sufficient_volume(mock_get, recwarn):
     mock_get.return_value = _mock_get({"success": True, "lowest_price": "12,34€", "volume": "81"})
+
+    source = SteamMarketSource(currency="EUR")
+    source.get_price("AK-47 | Redline (Field-Tested)")
+
+    assert len(recwarn) == 0
+
+
+@patch("cs2_arbitrage.sources.steam.requests.get")
+def test_get_price_does_not_warn_at_confidence_threshold(mock_get, recwarn):
+    # MIN_SALES_VOLUME_FOR_CONFIDENCE = 2 (cf. sources/base.py) : exactement
+    # au seuil ne doit pas avertir, seulement strictement en dessous.
+    mock_get.return_value = _mock_get({"success": True, "lowest_price": "12,34€", "volume": "2"})
 
     source = SteamMarketSource(currency="EUR")
     source.get_price("AK-47 | Redline (Field-Tested)")
