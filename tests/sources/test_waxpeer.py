@@ -5,6 +5,17 @@ import pytest
 
 from cs2_arbitrage.sources.waxpeer import WaxpeerError, WaxpeerSource, fetch_items
 
+
+@pytest.fixture(autouse=True)
+def clear_fetch_items_cache():
+    # fetch_items est mis en cache pour la durée du process (cf.
+    # waxpeer.py) : sans ce nettoyage, un test récupérerait le catalogue
+    # mocké d'un test précédent au lieu du sien.
+    fetch_items.cache_clear()
+    yield
+    fetch_items.cache_clear()
+
+
 CATALOG = {
     "success": True,
     "items": [
