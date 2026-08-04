@@ -191,6 +191,68 @@ def test_fetch_weapons_raises_on_unknown_type(mock_get):
 
 
 @patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_search_matches_all_query_tokens_in_any_order(mock_get):
+    mock_get.return_value = _mock_response(SKINPORT_CATALOG)
+
+    catalog = ItemCatalog()
+
+    # Les deux variantes Redline (normale + StatTrak) matchent "redline" et
+    # "ak47" ; seule Vulcan est exclue, faute de contenir "redline".
+    assert catalog.search("redline ak47") == [
+        "AK-47 | Redline (Field-Tested)",
+        "StatTrak™ AK-47 | Redline (Minimal Wear)",
+    ]
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_search_ignores_symbols_and_case(mock_get):
+    mock_get.return_value = _mock_response(SKINPORT_CATALOG)
+
+    catalog = ItemCatalog()
+
+    assert catalog.search("STATTRAK KARAMBIT") == ["★ StatTrak™ Karambit"]
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_search_ranks_shorter_matching_names_first(mock_get):
+    mock_get.return_value = _mock_response(SKINPORT_CATALOG)
+
+    catalog = ItemCatalog()
+
+    assert catalog.search("ak-47 redline") == [
+        "AK-47 | Redline (Field-Tested)",
+        "StatTrak™ AK-47 | Redline (Minimal Wear)",
+    ]
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_search_returns_empty_list_for_blank_query(mock_get):
+    mock_get.return_value = _mock_response(SKINPORT_CATALOG)
+
+    catalog = ItemCatalog()
+
+    assert catalog.search("   ") == []
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_search_returns_no_match_when_a_token_is_absent(mock_get):
+    mock_get.return_value = _mock_response(SKINPORT_CATALOG)
+
+    catalog = ItemCatalog()
+
+    assert catalog.search("ak-47 doppler") == []
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_search_respects_limit(mock_get):
+    mock_get.return_value = _mock_response(SKINPORT_CATALOG)
+
+    catalog = ItemCatalog()
+
+    assert catalog.search("ak-47 redline", limit=1) == ["AK-47 | Redline (Field-Tested)"]
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
 def test_ensure_catalog_raises_on_network_error(mock_get):
     import requests
 
