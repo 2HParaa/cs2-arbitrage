@@ -89,8 +89,7 @@ def fetch_recent_sales_volume() -> dict[str, int]:
     réponse) : moins bruitée pour distinguer un item vraiment illiquide
     d'un item juste calme la veille (choix utilisateur, 2026-08-04)."""
     return {
-        item["market_hash_name"]: item["last_7_days"]["volume"]
-        for item in fetch_sales_history()
+        item["market_hash_name"]: item["last_7_days"]["volume"] for item in fetch_sales_history()
     }
 
 
