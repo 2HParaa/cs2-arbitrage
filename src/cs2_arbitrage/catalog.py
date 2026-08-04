@@ -61,6 +61,22 @@ VANILLA_LABEL = "(Vanilla)"
 _QUALITY_PREFIXES = ("StatTrak™ ", "Souvenir ", "★ ")
 _WEAR_PATTERN = re.compile(r"^(?P<base>.*) \((?P<wear>[^()]+)\)$")
 
+# Recherche en langage naturel : nombre max de résultats renvoyés. Une
+# requête trop générique ("ak-47") peut matcher des dizaines de variantes
+# (toutes les usures, StatTrak, Souvenir...) ; limiter évite une checklist
+# interminable, même logique que TOP_TRADES_COUNT côté rapport (gui.py).
+SEARCH_RESULT_LIMIT = 40
+
+# Écarte tout ce qui n'est pas lettre/chiffre (★, ™, |, (), -, accents...),
+# y compris les espaces internes : "AK-47" et "ak47" tapés au clavier
+# doivent matcher le même nom normalisé, sans que l'utilisateur ait à
+# reproduire la ponctuation exacte du market_hash_name.
+_SEARCH_STRIP_PATTERN = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_for_search(text: str) -> str:
+    return _SEARCH_STRIP_PATTERN.sub("", text.lower())
+
 
 class CatalogError(Exception):
     """Erreur lors de la navigation dans le catalogue ou de la résolution
@@ -265,6 +281,37 @@ class ItemCatalog:
             if _parse_hash_name(item["market_hash_name"])[1] == target_skin
         ]
         return sorted(variants)
+
+    def search(self, query: str, limit: int = SEARCH_RESULT_LIMIT) -> list[str]:
+        """Recherche en langage naturel dans market_hash_name, en
+        alternative à la navigation Type -> Arme -> Skin -> Variante. Un
+        item matche si TOUS les mots de la requête apparaissent dans son
+        nom normalisé, dans n'importe quel ordre ("redline ak47" ==
+        "ak47 redline"). Résultats triés par longueur de nom croissante :
+        une requête précise ("ak-47 redline ft") fait remonter la variante
+        exacte avant les StatTrak/Souvenir plus longs qui la contiennent
+        aussi."""
+        self._ensure_catalog()
+        # Découpage sur les espaces AVANT normalisation, pour garder les
+        # mots de la requête comme tokens distincts ("ak-47 redline" ->
+        # ["ak47", "redline"]) : normaliser d'abord fusionnerait tout en un
+        # seul token, perdant la frontière entre les mots.
+        tokens = [t for t in (_normalize_for_search(word) for word in query.split()) if t]
+        if not tokens:
+            return []
+
+        matches = []
+        seen = set()
+        for item in self._catalog:
+            hash_name = item["market_hash_name"]
+            if hash_name in seen:
+                continue
+            if all(token in _normalize_for_search(hash_name) for token in tokens):
+                seen.add(hash_name)
+                matches.append(hash_name)
+
+        matches.sort(key=len)
+        return matches[:limit]
 
     def _ensure_catalog(self) -> None:
         if self._catalog is not None:

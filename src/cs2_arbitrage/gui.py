@@ -19,6 +19,15 @@ ICON_DISPLAY_SIZE = 96
 ICON_HEADER_SIZE = 192
 REPORT_ICON_SIZE = 64
 ICON_POLL_INTERVAL_MS = 50
+# Attend une pause dans la frappe avant de lancer la recherche (évite un
+# appel à ItemCatalog.search — donc un balayage du catalogue entier — à
+# chaque touche pressée).
+SEARCH_DEBOUNCE_MS = 250
+# Volontairement plus bas que catalog.SEARCH_RESULT_LIMIT (40) : ici c'est
+# une liste de suggestions façon autocomplétion, pas un résultat de
+# recherche exhaustif — chaque suggestion charge sa propre icône, pas
+# question d'en déclencher des dizaines d'un coup à chaque frappe.
+SEARCH_SUGGESTIONS_LIMIT = 8
 # Nombre max de trades affichés dans le rapport (un par item, cf.
 # ReportApp._best_trade_per_item) : un scan de catalogue entier peut
 # trouver bien plus d'opportunités que ça, au prix d'une fenêtre très
@@ -163,6 +172,9 @@ class ItemBrowserApp:
         self.placeholder_image = Image.new("RGBA", (8, 8), PALETTE["surface_alt"])
         self.render_generation = 0
         self.current_skin_hash_name = None
+        self.search_active = False
+        self.search_query = ""
+        self.search_after_id: str | None = None
         self.result_items: list[str] = []
         self.result_platforms: list[str] = []
         self.result_scan_min_price: Decimal | None = None
@@ -195,6 +207,16 @@ class ItemBrowserApp:
             text_color=PALETTE["text"],
         )
         self.breadcrumb_label.pack(side="left", padx=12)
+
+        self.search_entry = ctk.CTkEntry(
+            self.root,
+            placeholder_text="Rechercher un skin (ex: AK-47 Redline)",
+            fg_color=PALETTE["surface"],
+            border_color=PALETTE["border"],
+            text_color=PALETTE["text"],
+        )
+        self.search_entry.pack(fill="x", padx=12, pady=(0, 4))
+        self.search_entry.bind("<KeyRelease>", self._on_search_key)
 
         self.body_frame = ctk.CTkScrollableFrame(
             self.root, fg_color=PALETTE["bg"], scrollbar_button_color=PALETTE["surface_hover"]
@@ -409,12 +431,49 @@ class ItemBrowserApp:
         self._render()
 
     def _go_back(self) -> None:
+        if self.search_active:
+            self._clear_search()
+            return
         self.path.pop()
         self._render()
 
     def _update_breadcrumb(self) -> None:
-        self.breadcrumb_label.configure(text=" > ".join(self.path) or "Type d'item")
-        self.back_button.configure(state="normal" if self.path else "disabled")
+        if self.search_active:
+            text = f'Résultats pour "{self.search_query}"'
+        else:
+            text = " > ".join(self.path) or "Type d'item"
+        self.breadcrumb_label.configure(text=text)
+        self.back_button.configure(state="normal" if (self.path or self.search_active) else "disabled")
+
+    # -- Recherche en langage naturel ------------------------------------
+
+    def _on_search_key(self, event=None) -> None:
+        if self.search_after_id is not None:
+            self.root.after_cancel(self.search_after_id)
+            self.search_after_id = None
+
+        query = self.search_entry.get().strip()
+        if not query:
+            if self.search_active:
+                self.search_active = False
+                self._render()
+            return
+        self.search_after_id = self.root.after(SEARCH_DEBOUNCE_MS, self._run_search, query)
+
+    def _run_search(self, query: str) -> None:
+        self.search_after_id = None
+        # La frappe a continué pendant le délai d'attente : cette requête
+        # est déjà obsolète, une plus récente a été (ou va être) planifiée.
+        if self.search_entry.get().strip() != query:
+            return
+        self.search_active = True
+        self.search_query = query
+        self._render()
+
+    def _clear_search(self) -> None:
+        self.search_active = False
+        self.search_entry.delete(0, "end")
+        self._render()
 
     def _render(self) -> None:
         self.render_generation += 1
@@ -423,6 +482,9 @@ class ItemBrowserApp:
         self._update_breadcrumb()
 
         try:
+            if self.search_active:
+                self._render_search_results()
+                return
             level = len(self.path)
             if level == 0:
                 self._render_choice_list(self.catalog.fetch_types(), self._enter)
@@ -525,6 +587,39 @@ class ItemBrowserApp:
                 text_color=PALETTE["text"],
                 command=lambda h=hash_name, v=variable: self._toggle_item(h, v),
             ).pack(fill="x", pady=2)
+
+    def _render_search_results(self) -> None:
+        # Suggestions façon autocomplétion : icône + nom complet + case à
+        # cocher, directement au niveau Variante (pas de nouvelle étape de
+        # navigation) puisque market_hash_name est déjà l'item final.
+        hash_names = self.catalog.search(self.search_query, limit=SEARCH_SUGGESTIONS_LIMIT)
+        if not hash_names:
+            self._render_empty()
+            return
+
+        generation = self.render_generation
+        icon_labels = []
+        for hash_name in hash_names:
+            row = ctk.CTkFrame(self.body_frame, fg_color="transparent")
+            row.pack(fill="x", pady=3)
+            icon_label = ctk.CTkLabel(
+                row, text="", image=_ctk_image(self.placeholder_image, ICON_DISPLAY_SIZE)
+            )
+            icon_label.pack(side="left", padx=(0, 8))
+            variable = tk.BooleanVar(value=hash_name in self.selected_items)
+            ctk.CTkCheckBox(
+                row,
+                text=hash_name,
+                variable=variable,
+                fg_color=PALETTE["accent"],
+                hover_color=PALETTE["accent_hover"],
+                checkmark_color=PALETTE["accent_text"],
+                text_color=PALETTE["text"],
+                command=lambda h=hash_name, v=variable: self._toggle_item(h, v),
+            ).pack(side="left", fill="x", expand=True)
+            icon_labels.append(icon_label)
+
+        self._load_icons_async(hash_names, icon_labels, generation)
 
     # -- Chargement des images en arrière-plan --------------------------
 
@@ -638,6 +733,8 @@ class ItemBrowserApp:
         self.root.destroy()
 
     def _on_close(self) -> None:
+        if self.search_after_id is not None:
+            self.root.after_cancel(self.search_after_id)
         self.result_items = []
         self.result_platforms = []
         self.result_scan_min_price = None
