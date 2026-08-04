@@ -3,7 +3,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from cs2_arbitrage.sources.skinport import SkinportError, SkinportSource, fetch_items
+from cs2_arbitrage.sources.skinport import (
+    SkinportError,
+    SkinportSource,
+    fetch_items,
+    fetch_recent_sales_volume,
+    fetch_sales_history,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +21,13 @@ def clear_fetch_items_cache():
     fetch_items.cache_clear()
     yield
     fetch_items.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def clear_fetch_sales_history_cache():
+    fetch_sales_history.cache_clear()
+    yield
+    fetch_sales_history.cache_clear()
 
 
 CATALOG = [
@@ -126,6 +139,43 @@ def test_get_price_warns_on_low_quantity(mock_get):
         price = source.get_price("AK-47 | Redline (Field-Tested)")
 
     assert price.amount == Decimal("12.34")
+
+
+SALES_HISTORY = [
+    {
+        "market_hash_name": "AK-47 | Redline (Field-Tested)",
+        "last_24_hours": {"volume": 8},
+        "last_7_days": {"volume": 56},
+    },
+    {
+        "market_hash_name": "AWP | Asiimov (Field-Tested)",
+        "last_24_hours": {"volume": 0},
+        "last_7_days": {"volume": 2},
+    },
+]
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_fetch_sales_history_returns_raw_data(mock_get):
+    mock_get.return_value = _mock_get(SALES_HISTORY)
+
+    history = fetch_sales_history()
+
+    assert history == SALES_HISTORY
+    _, kwargs = mock_get.call_args
+    assert kwargs["params"] == {"app_id": 730}
+
+
+@patch("cs2_arbitrage.sources.skinport.requests.get")
+def test_fetch_recent_sales_volume_maps_name_to_7d_volume(mock_get):
+    mock_get.return_value = _mock_get(SALES_HISTORY)
+
+    volumes = fetch_recent_sales_volume()
+
+    assert volumes == {
+        "AK-47 | Redline (Field-Tested)": 56,
+        "AWP | Asiimov (Field-Tested)": 2,
+    }
 
 
 @patch("cs2_arbitrage.sources.skinport.requests.get")
