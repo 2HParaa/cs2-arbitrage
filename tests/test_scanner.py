@@ -389,7 +389,10 @@ def test_enrich_top_opportunities_limits_to_candidate_count(mock_steam, mock_csm
     mock_steam.side_effect = lambda name: _make_price(name, "2.8", "steam")
     mock_csmoney.side_effect = lambda name: _make_price(name, "2.5", "csmoney")
 
-    prices = [_make_price("Best Item", "2.0", "skinport"), _make_price("Worst Item", "2.0", "skinport")]
+    prices = [
+        _make_price("Best Item", "2.0", "skinport"),
+        _make_price("Worst Item", "2.0", "skinport"),
+    ]
     opportunities = [
         _make_opportunity("Best Item", Decimal("1.0")),  # +50%
         _make_opportunity("Worst Item", Decimal("0.1")),  # +5%
@@ -423,7 +426,10 @@ def test_enrich_top_opportunities_leaves_non_candidates_untouched(mock_steam, mo
     mock_steam.side_effect = lambda name: _make_price(name, "2.8", "steam")
     mock_csmoney.side_effect = lambda name: _make_price(name, "2.5", "csmoney")
 
-    prices = [_make_price("Best Item", "2.0", "skinport"), _make_price("Worst Item", "2.0", "skinport")]
+    prices = [
+        _make_price("Best Item", "2.0", "skinport"),
+        _make_price("Worst Item", "2.0", "skinport"),
+    ]
     best = _make_opportunity("Best Item", Decimal("1.0"))
     worst = _make_opportunity("Worst Item", Decimal("0.1"))
 
