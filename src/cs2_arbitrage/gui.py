@@ -443,7 +443,9 @@ class ItemBrowserApp:
         else:
             text = " > ".join(self.path) or "Type d'item"
         self.breadcrumb_label.configure(text=text)
-        self.back_button.configure(state="normal" if (self.path or self.search_active) else "disabled")
+        self.back_button.configure(
+            state="normal" if (self.path or self.search_active) else "disabled"
+        )
 
     # -- Recherche en langage naturel ------------------------------------
 
