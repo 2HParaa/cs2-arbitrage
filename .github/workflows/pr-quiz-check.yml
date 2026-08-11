@@ -1,0 +1,23 @@
+name: Quiz PR
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  quiz-checkbox:
+    name: Quiz checkbox
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verifier la case quiz ou non-applicable
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          echo "$PR_BODY" > pr_body.txt
+          if grep -qiE '^\s*-\s*\[x\]\s*.*quiz' pr_body.txt || grep -qiE '^\s*-\s*\[x\]\s*.*non applicable' pr_body.txt; then
+            echo "OK : case quiz ou non-applicable cochee dans la description de la PR."
+          else
+            echo "::error::Coche la case 'j'ai lu le quiz Notion' (si une page d'explication existe pour ce changement) ou 'Non applicable' dans la description de la PR avant de merger."
+            exit 1
+          fi
