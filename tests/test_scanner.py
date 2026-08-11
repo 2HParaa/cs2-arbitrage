@@ -1,6 +1,8 @@
 from decimal import Decimal
 from unittest.mock import patch
 
+import requests
+
 from cs2_arbitrage.compare import Opportunity
 from cs2_arbitrage.scanner import (
     enrich_top_opportunities,
@@ -8,6 +10,7 @@ from cs2_arbitrage.scanner import (
     run_catalog_scan,
 )
 from cs2_arbitrage.sources.base import Price
+from cs2_arbitrage.sources.csdeals import CSDealsError
 from cs2_arbitrage.sources.steam import SteamMarketError
 
 SKINPORT_ITEMS = [
@@ -129,6 +132,56 @@ def test_fetch_scan_prices_skips_low_liquidity_marketcsgo_price_but_keeps_others
 
     sources = {price.source for price in prices}
     assert "marketcsgo" not in sources
+
+
+@patch("cs2_arbitrage.scanner.fetch_marketcsgo_items")
+@patch("cs2_arbitrage.scanner.fetch_whitemarket_items")
+@patch("cs2_arbitrage.scanner.fetch_csdeals_items")
+@patch("cs2_arbitrage.scanner.fetch_waxpeer_items")
+@patch("cs2_arbitrage.scanner.fetch_skinport_items")
+def test_fetch_scan_prices_survives_csdeals_http_error(
+    mock_skinport, mock_waxpeer, mock_csdeals, mock_whitemarket, mock_marketcsgo
+):
+    # Reproduit le blocage observé en réel le 2026-08-11 : CS.Deals renvoie
+    # désormais un 403 Cloudflare ("challenge") sur son endpoint public
+    # depuis sa migration v2.0. Le scan ne doit pas planter entièrement pour
+    # autant, seule la jambe de vente CS.Deals doit manquer.
+    mock_skinport.return_value = [
+        {"market_hash_name": "Item", "min_price": 1.0, "quantity": 50},
+    ]
+    mock_waxpeer.return_value = [
+        {"name": "Item", "min": 2000, "count": 50},  # 2.00
+    ]
+    mock_csdeals.side_effect = requests.exceptions.HTTPError("403 Client Error: Forbidden")
+    mock_whitemarket.return_value = []
+    mock_marketcsgo.return_value = []
+
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
+
+    sources = {price.source for price in prices}
+    assert sources == {"skinport", "waxpeer"}
+
+
+@patch("cs2_arbitrage.scanner.fetch_marketcsgo_items")
+@patch("cs2_arbitrage.scanner.fetch_whitemarket_items")
+@patch("cs2_arbitrage.scanner.fetch_csdeals_items")
+@patch("cs2_arbitrage.scanner.fetch_waxpeer_items")
+@patch("cs2_arbitrage.scanner.fetch_skinport_items")
+def test_fetch_scan_prices_survives_csdeals_source_error(
+    mock_skinport, mock_waxpeer, mock_csdeals, mock_whitemarket, mock_marketcsgo
+):
+    mock_skinport.return_value = [
+        {"market_hash_name": "Item", "min_price": 1.0, "quantity": 50},
+    ]
+    mock_waxpeer.return_value = []
+    mock_csdeals.side_effect = CSDealsError("catalogue inexploitable")
+    mock_whitemarket.return_value = []
+    mock_marketcsgo.return_value = []
+
+    prices = fetch_scan_prices(Decimal(0), Decimal(5))
+
+    assert "csdeals" not in {price.source for price in prices}
+    assert "skinport" in {price.source for price in prices}
 
 
 @patch("cs2_arbitrage.scanner.fetch_marketcsgo_items")

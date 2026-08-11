@@ -1,15 +1,21 @@
 from decimal import Decimal
 from urllib.parse import urlparse
 
+import requests
+
 from cs2_arbitrage.compare import Opportunity, compare, profit_percent
 from cs2_arbitrage.normalize import normalize
 from cs2_arbitrage.sources.base import MIN_VOLUME_FOR_CONFIDENCE, Price
+from cs2_arbitrage.sources.csdeals import CSDealsError
 from cs2_arbitrage.sources.csdeals import fetch_items as fetch_csdeals_items
 from cs2_arbitrage.sources.csmoney import CSMoneyError, CSMoneySource
+from cs2_arbitrage.sources.marketcsgo import MarketCSGOError
 from cs2_arbitrage.sources.marketcsgo import fetch_items as fetch_marketcsgo_items
 from cs2_arbitrage.sources.skinport import fetch_items as fetch_skinport_items
 from cs2_arbitrage.sources.steam import SteamMarketError, SteamMarketSource
+from cs2_arbitrage.sources.waxpeer import WaxpeerError
 from cs2_arbitrage.sources.waxpeer import fetch_items as fetch_waxpeer_items
+from cs2_arbitrage.sources.whitemarket import WhiteMarketError
 from cs2_arbitrage.sources.whitemarket import fetch_items as fetch_whitemarket_items
 
 # Scan de tout le catalogue (par opposition à la sélection manuelle d'items
@@ -121,6 +127,25 @@ def _marketcsgo_catalog_prices():
         yield item["market_hash_name"], Decimal(item["price"]), "marketcsgo"
 
 
+def _safe_catalog_prices(source_label: str, catalog_prices_fn, *expected_errors):
+    """Isole une jambe de vente optionnelle du scan (Waxpeer/CS.Deals/
+    White.market/market.csgo.com) : si sa récupération échoue, on avertit et
+    on continue avec les autres plutôt que de perdre tout le scan pour une
+    seule source en panne. Repéré le 2026-08-11 : CS.Deals bloque désormais
+    ses appels sans navigateur derrière une protection Cloudflare (403
+    "challenge" sur le site entier, pas juste l'API) suite à sa migration
+    v2.0 — sans ce garde-fou, un `requests.exceptions.HTTPError` non
+    intercepté y faisait planter fetch_scan_prices en entier, y compris les
+    3 autres sources pourtant fonctionnelles. Skinport (référence du scan)
+    n'est volontairement pas concerné : sans lui, il n'y a de toute façon
+    aucun item à scanner."""
+    try:
+        return list(catalog_prices_fn())
+    except (requests.RequestException, *expected_errors) as error:
+        print(f"[avertissement] {source_label} indisponible pour le scan : {error}")
+        return []
+
+
 def fetch_scan_prices(
     min_price: Decimal, max_price: Decimal, categories: set[str] | None = None
 ) -> list[Price]:
@@ -150,10 +175,10 @@ def fetch_scan_prices(
     prices = []
     for name, amount, source in (
         *skinport_prices,
-        *_waxpeer_catalog_prices(),
-        *_csdeals_catalog_prices(),
-        *_whitemarket_catalog_prices(),
-        *_marketcsgo_catalog_prices(),
+        *_safe_catalog_prices("Waxpeer", _waxpeer_catalog_prices, WaxpeerError),
+        *_safe_catalog_prices("CS.Deals", _csdeals_catalog_prices, CSDealsError),
+        *_safe_catalog_prices("White.market", _whitemarket_catalog_prices, WhiteMarketError),
+        *_safe_catalog_prices("market.csgo.com", _marketcsgo_catalog_prices, MarketCSGOError),
     ):
         if name in qualifying_items:
             prices.append(Price(item_name=name, amount=amount, currency="USD", source=source))
